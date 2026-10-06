@@ -1,0 +1,20 @@
+{
+  "name": "optchat",
+  "version": "0.1.0",
+  "description": "OptChat: endless chat where the chat history is the memory (compressed binary tree). Standalone core first.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "bun run src/cli.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "bin": {
+    "optchat": "./src/cli.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.3"
+  }
+}
