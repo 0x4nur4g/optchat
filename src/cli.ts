@@ -2,40 +2,40 @@
 /**
  * Plain terminal CLI: one endless chat, no TUI redraws, no cursor games.
  *
- * Usage: bun run src/cli.ts --scope global --dir ./data [--print-view]
+ * Usage: optchat --scope global --dir ./data [--print-view]
  *   --print-view  print the current view and exit (no input loop)
  *
  * On start the view is printed once. Then each stdin line is queued and a
- * turn is run. Lines arriving while a turn streams stay queued and are
- * answered by a later turn.
+ * turn is run. Lines arriving during a turn reach the native actor between
+ * completed tool calls, or start a fresh turn after it finishes.
  *
  * Model: OPENAI_BASE_URL + OPENAI_API_KEY + OPENAI_MODEL (chat completions,
- * plain fetch). Without them the turns fall back to MockAdapter and the
- * compactor stays off (no summaries, so no tree writes).
+ * plain fetch). Interactive mode requires all three settings. --print-view
+ * needs no model configuration.
  */
 import * as readline from "node:readline";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { readFile, realpath } from "node:fs/promises";
 import * as path from "node:path";
 import { SCOPES, byteLen } from "./constants";
-import type { Kind, LogMessage, TreeNode } from "./constants";
-import { MockAdapter } from "./model/adapter";
-import type { TurnAdapter, TurnEntry, TurnRequest } from "./model/adapter";
-import { OpenAICompat, parseToolLine, readEnv, redactUrl } from "./model/openai-compat";
-import { appendMessage, loadAll } from "./storage/log";
+import type { Kind, TreeNode } from "./constants";
+import { OpenAICompat, readEnv, redactUrl } from "./model/openai-compat";
+import { openLog } from "./storage/log";
 import { acquireLock } from "./storage/lock";
 import type { LockHandle } from "./storage/lock";
-import { loadAllNodes, nodeKey, saveNode } from "./storage/tree-store";
-import { appendAndFit, foldAll } from "./view/fold";
+import { loadAllNodes, saveNode } from "./storage/tree-store";
+import { nodeKey } from "./tree/address";
+import { appendAndFit, fit, foldAll } from "./view/fold";
 import type { Part } from "./view/fold";
-import { renderBefore, renderView } from "./view/render";
+import { renderView } from "./view/render";
 import { pumpOnce } from "./compactor/pump";
-import { capToolResult } from "./compactor/prompts";
-import { runTurn, settle } from "./turn/loop";
+import { runTurn, settle, TURN_SYSTEM } from "./turn/loop";
 import type { TurnContext } from "./turn/loop";
 import { zoom } from "./tools/zoom";
 import type { ZoomStore } from "./tools/zoom";
 import { lookup } from "./tools/date";
+import { TOOL_DEFINITIONS } from "./tools/definitions";
 
 function arg(name: string, fallback: string): string {
   const i = process.argv.indexOf(name);
@@ -43,17 +43,60 @@ function arg(name: string, fallback: string): string {
   return value !== undefined && !value.startsWith("--") ? value : fallback;
 }
 
+if (process.argv.includes("--help") || process.argv.includes("-h")) {
+  console.log(`Usage: optchat [--scope global] [--dir ./data] [--instructions FILE] [--print-view] [--git]
+
+--print-view    Print stored memory and exit without a model.
+--instructions Read FILE once at startup (default: <dir>/instructions.md, if present).
+--git          Commit chat/tree data after each turn in a separate data repository.
+--help         Show this help without creating data or taking a lock.
+
+Interactive mode requires OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL.
+/cancel cancels the current turn. /exit or /quit drains input and exits.
+Ctrl+C cancels work, preserves queued input, and exits.`);
+  process.exit(0);
+}
+
 const scope = arg("--scope", SCOPES[0]);
 const dir = arg("--dir", "./data");
 const printView = process.argv.includes("--print-view");
+const gitPersistence = process.argv.includes("--git");
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
 const PLACEHOLDER = "(not summarized yet: zoom it)"; // render.ts placeholder body
-const PUMP_IDLE_MS = 100;
-const MAX_TOOL_ROUNDS = 8;
+
+if (!(SCOPES as readonly string[]).includes(scope)) {
+  console.error("optchat: only scope global is supported");
+  process.exit(1);
+}
+let env: ReturnType<typeof readEnv> = null;
+try {
+  if (!printView) env = readEnv();
+} catch (err) {
+  console.error(`optchat: ${errText(err)}`);
+  process.exit(1);
+}
+if (!printView && env === null) {
+  console.error("optchat: OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required for interactive mode");
+  process.exit(1);
+}
+
+let system = TURN_SYSTEM;
+if (!printView) {
+  const instructionsFile = arg("--instructions", path.join(dir, "instructions.md"));
+  try {
+    if (process.argv.includes("--instructions") || existsSync(instructionsFile)) {
+      const instructions = await readFile(instructionsFile, "utf8");
+      system += "\n\n" + instructions;
+    }
+  } catch (err) {
+    console.error(`optchat: instructions: ${errText(err)}`);
+    process.exit(1);
+  }
+}
 
 // --- start: single writer, load log + tree, fold the view from 0 ------------
 let lock: LockHandle;
@@ -64,7 +107,12 @@ try {
   process.exit(1);
 }
 
-const messages: LogMessage[] = await loadAll(dir, scope);
+try {
+const writer = await openLog(dir, scope);
+const messages = writer.messages;
+if (messages.some((message, i) => message.i !== i) || writer.nextId !== messages.length) {
+  throw new Error("chat log ID gap: restore missing records before using memory");
+}
 const nodes = await loadAllNodes(dir, scope);
 
 const isBuilt = (l: number, i: number): boolean => nodes.has(nodeKey(l, i));
@@ -96,7 +144,7 @@ function fireFit(): void {
 
 /** Refit after a tree save: sizes changed, the fold may coarsen. */
 function refit(): void {
-  view = foldAll(messages.length, sizeOf, isBuilt);
+  view = fit(view, messages.length, sizeOf, isBuilt);
   fireFit();
 }
 
@@ -130,43 +178,24 @@ function runTool(name: string, input: Record<string, unknown>): string {
   return `Unknown tool ${name}.`;
 }
 
-// --- model adapter: env, else MockAdapter with the compactor off ------------
-const env = readEnv();
-let turn: TurnAdapter;
-let compactor: { compress(contextLines: string[], step: string, system: string): Promise<string> } | null = null;
-if (env === null) {
-  turn = new MockAdapter();
-  console.log("optchat: OPENAI_BASE_URL/OPENAI_API_KEY/OPENAI_MODEL not set: MockAdapter answers, compactor off");
-} else {
-  const compat = new OpenAICompat(env);
-  turn = compat;
-  compactor = compat;
-  console.log(`optchat: model ${env.model} at ${redactUrl(env.baseUrl)}`);
-}
-
-/** Execute each TOOL line, log it plus its echo, and run one more round. */
-class ToolRounds implements TurnAdapter {
-  constructor(
-    private readonly inner: TurnAdapter,
-    private readonly run: (name: string, input: Record<string, unknown>) => string,
-  ) {}
-
-  async *ask(req: TurnRequest): AsyncIterable<TurnEntry> {
-    let userText = req.userText;
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const results: string[] = [];
-      for await (const entry of this.inner.ask({ system: req.system, view: req.view, userText })) {
-        const call = entry.kind === "tool" ? parseToolLine(entry.text) : null;
-        yield entry;
-        if (call === null) continue;
-        const result = capToolResult(this.run(call.name, call.input)).text;
-        results.push(result);
-        yield { kind: "echo", text: result };
-      }
-      if (results.length === 0) return;
-      userText = results.join("\n\n"); // tool results go back as the next user block
-    }
-  }
+// --- native actor: fixed tools, full in-turn history, queued input -----------
+const queue: string[] = [];
+const actorPending: string[] = [];
+let activeTurn: AbortController | null = null;
+const model = env === null ? null : new OpenAICompat(env, {
+  tools: TOOL_DEFINITIONS,
+  runTool,
+  takePending: () => {
+    if (activeTurn?.signal.aborted) return [];
+    const pending = queue.splice(0);
+    actorPending.push(...pending); // retain until each delivered user is fsynced
+    return pending;
+  },
+});
+if (!printView && env !== null) {
+  const url = new URL(env.baseUrl);
+  const redacted = url.username !== "" || url.password !== "" || url.search !== "";
+  console.log(`optchat: model ${env.model} at ${redactUrl(env.baseUrl)}${redacted ? " (credentials present, redacted)" : ""}`);
 }
 
 // --- compactor pump: background loop; JOBS cap lives in pumpOnce ------------
@@ -174,23 +203,20 @@ const busy = new Set<string>();
 const reported = new Set<string>();
 let stopPump = false;
 let idleWake: (() => void) | null = null;
+let pumpVersion = 0;
+const pumpAbort = new AbortController();
 
 function wakePump(): void {
+  pumpVersion++;
   const wake = idleWake;
   idleWake = null;
   if (wake !== null) wake();
 }
 
-function idleWait(): Promise<void> {
+function idleWait(observed: number): Promise<void> {
+  if (observed !== pumpVersion) return Promise.resolve();
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      idleWake = null;
-      resolve();
-    }, PUMP_IDLE_MS);
-    idleWake = () => {
-      clearTimeout(timer);
-      resolve();
-    };
+    idleWake = resolve;
   });
 }
 
@@ -201,27 +227,30 @@ function contextOf(snapshot: Part[], l: number, i: number): string[] {
   for (const p of snapshot) {
     if (p.id + p.n > end) break;
     const text = nodes.get(nodeKey(p.l, p.i))?.text;
-    if (text !== undefined) lines.push(text);
+    if (text !== undefined) lines.push(text.replace(/\r\n|\r|\n/g, " "));
   }
   return lines;
 }
 
 async function pumpLoop(): Promise<void> {
-  const compressor = compactor;
+  const compressor = model;
   if (compressor === null) return; // no model: a fake summary would poison the tree
   while (!stopPump) {
+    const observed = pumpVersion;
     const snapshot = view;
     const started = await pumpOnce({
       T: messages.length,
       view: snapshot,
       isBuilt,
-      startOf: (p) => p.id,
       busy,
       reported,
       adapter: compressor,
+      signal: pumpAbort.signal,
+      onSettled: wakePump,
       message: (i) => {
         const m = messages[i];
-        return m === undefined ? { kind: "note", text: "" } : { kind: m.kind, text: m.text };
+        if (m === undefined) throw new Error(`missing message ${i}`);
+        return { kind: m.kind, text: m.text };
       },
       children: (l, i) => [
         nodes.get(nodeKey(l - 1, 2 * i))?.text ?? "",
@@ -236,36 +265,91 @@ async function pumpLoop(): Promise<void> {
       },
       report: (l, i, err) => console.error(`optchat: compactor ${l}:${i} failed: ${errText(err)}`),
     });
-    if (started === 0 && !stopPump) await idleWait();
+    if (started === 0 && !stopPump) await idleWait(observed);
   }
 }
 
 // --- turn loop: settle, run a turn, commit the data dir ---------------------
-const queue: string[] = [];
 const abort = new AbortController();
 let turnLoop: Promise<void> | null = null;
 
 /** Append one line (write + fsync), fold it into the view, wake the pump. */
 async function log(kind: Kind, text: string): Promise<void> {
-  const msg = await appendMessage(dir, scope, kind, text);
-  messages.push(msg);
+  const expected = messages.length;
+  if (writer.nextId !== expected) {
+    throw new Error("chat log ID gap: restore missing records before appending input");
+  }
+  const message = await writer.append(kind, text);
+  if (message.i !== expected) {
+    // Never let an unexpected durable ID enter the contiguous view.
+    // Acknowledge this persisted input once, then stop all model work.
+    console.log(`${kind}: ${text}`);
+    console.error("optchat: chat log ID gap: input retained; restore missing records before using memory");
+    process.exitCode = 1;
+    abort.abort();
+    stopPump = true;
+    pumpAbort.abort();
+    wakePump();
+    closeInput();
+    return;
+  }
   view = appendAndFit(view, messages.length, sizeOf, isBuilt);
   wakePump();
   console.log(`${kind}: ${text}`);
 }
 
 const ctx: TurnContext = {
-  renderView: () => renderBefore(view, messages.length, getText),
+  renderView: () => renderView(view, getText),
   log,
-  adapter: new ToolRounds(turn, runTool),
+  adapter: model!,
+  system,
+  onEntry: (entry) => {
+    if (entry.kind === "thought") console.log(`thought: ${entry.text}`);
+    if (entry.kind === "user" && actorPending[0] === entry.text) actorPending.shift();
+  },
 };
+
+/** Preserve undelivered input on failure/cancel before releasing the lock. */
+async function preservePending(): Promise<void> {
+  for (const pending of [actorPending, queue]) {
+    await preserveInputs(pending);
+  }
+}
 
 async function commitTurn(): Promise<void> {
   try {
-    if (!existsSync(path.join(dir, ".git"))) return; // not a repo: silent skip
-    const add = spawnSync("git", ["-C", dir, "add", "-A"], { stdio: "ignore" });
+    if (!gitPersistence) return;
+    const dataRoot = await realpath(dir);
+    const gitEnv = { ...process.env };
+    for (const key of Object.keys(gitEnv)) {
+      if (key.startsWith("GIT_")) delete gitEnv[key];
+    }
+    const git = (args: string[]) => spawnSync("git", ["-C", dataRoot, "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8", env: gitEnv });
+    const repo = git(["rev-parse", "--show-toplevel"]);
+    if (repo.status !== 0 || await realpath(repo.stdout.trim()) !== dataRoot) {
+      throw new Error("--git requires a separate repository rooted at the data directory");
+    }
+    const sourceRoot = await realpath(path.resolve(import.meta.dir, ".."));
+    if (sourceRoot === dataRoot || sourceRoot.startsWith(dataRoot + path.sep)) {
+      throw new Error("refusing to commit the source checkout");
+    }
+    const name = git(["config", "--local", "--get", "user.name"]).stdout.trim();
+    const email = git(["config", "--local", "--get", "user.email"]).stdout.trim();
+    const identity = /^(?:\d+\+)?([^@\s]+)@users\.noreply\.github\.com$/.exec(email);
+    if (!name || identity?.[1]?.toLowerCase() !== name.toLowerCase()) {
+      throw new Error("data repository needs a local pseudonymous name and matching GitHub noreply email");
+    }
+    Object.assign(gitEnv, {
+      GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email,
+      GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email,
+    });
+    const paths = [`chat/${scope}`, `tree/${scope}`].filter((p) => existsSync(path.join(dataRoot, p)));
+    if (paths.length === 0) return;
+    const add = git(["add", "--", ...paths]);
     if (add.error) throw add.error;
-    const commit = spawnSync("git", ["-C", dir, "commit", "-m", "turn"], { stdio: "ignore" });
+    if (add.status !== 0) throw new Error(`git add failed (status ${add.status})`);
+    if (git(["diff", "--cached", "--quiet", "--", ...paths]).status === 0) return;
+    const commit = git(["commit", "--only", "-m", "turn", "--", ...paths]);
     if (commit.error) throw commit.error;
     if (commit.status !== 0) console.error(`optchat: git commit skipped (status ${commit.status})`);
   } catch (err) {
@@ -275,28 +359,45 @@ async function commitTurn(): Promise<void> {
 
 async function turnLoopBody(): Promise<void> {
   while (queue.length > 0 && !abort.signal.aborted) {
-    // Never start a turn on placeholder lines. Without a compactor they can
-    // never become built, so mock mode proceeds (placeholder is the fail-safe).
-    const ok = await settle(
-      () => compactor === null || allBuilt(),
-      (cb) => fitWaiters.add(cb),
-      abort.signal,
-    );
-    if (!ok) return;
+    activeTurn = new AbortController();
+    ctx.signal = AbortSignal.any([abort.signal, activeTurn.signal]);
     try {
-      await runTurn(queue, ctx);
+      const ok = await settle(allBuilt, (cb) => {
+        fitWaiters.add(cb);
+        return () => { fitWaiters.delete(cb); };
+      }, ctx.signal);
+      if (ok) await runTurn(queue, ctx);
+      else await preservePending();
     } catch (err) {
-      console.error(`optchat: turn failed: ${errText(err)}`);
+      if (!ctx.signal.aborted) console.error(`optchat: turn failed: ${errText(err)}`);
+      await preservePending();
+    } finally {
+      activeTurn = null;
+      await preserveInputs(actorPending);
     }
     await commitTurn();
   }
 }
 
+async function preserveInputs(pending: string[]): Promise<void> {
+  while (pending.length > 0) {
+    await log("user", pending[0]!);
+    pending.shift();
+  }
+}
+
+let closeInput = (): void => {};
+
 function kickTurn(): void {
-  if (turnLoop !== null) return;
-  turnLoop = turnLoopBody();
-  void turnLoop.finally(() => {
+  if (turnLoop !== null || abort.signal.aborted || queue.length === 0) return;
+  turnLoop = turnLoopBody().catch((err) => {
+    console.error(`optchat: input persistence failed: ${errText(err)}`);
+    process.exitCode = 1;
+    abort.abort();
+    closeInput();
+  }).finally(() => {
     turnLoop = null;
+    if (queue.length > 0 && !abort.signal.aborted) kickTurn();
   });
 }
 
@@ -305,28 +406,54 @@ console.log(`optchat scope=${scope} dir=${dir}`);
 console.log(renderView(view, getText));
 
 if (printView) {
-  await lock.release();
+  // No model calls or background writes in print-only mode.
 } else {
-  void pumpLoop();
+  const pumping = pumpLoop();
 
   const rl = readline.createInterface({ input: process.stdin });
+  closeInput = () => rl.close();
+  const onInterrupt = (): void => {
+    abort.abort();
+    activeTurn?.abort();
+    rl.close();
+  };
+  process.on("SIGINT", onInterrupt);
   rl.on("line", (line: string) => {
-    const text = line.trim();
-    if (text === "") return;
-    if (text === "/exit" || text === "/quit") {
+    const command = line.trim();
+    if (command === "") return;
+    if (command === "/exit" || command === "/quit") {
       rl.close();
       return;
     }
-    queue.push(text);
+    if (command === "/cancel") {
+      activeTurn?.abort();
+      return;
+    }
+    queue.push(line);
     kickTurn();
   });
 
-  await new Promise<void>((resolve) => rl.once("close", () => resolve()));
-
-  // Drain queued texts (settle needs the pump), then stop the background work.
-  await turnLoop;
-  stopPump = true;
-  wakePump();
-  abort.abort();
+  try {
+    await new Promise<void>((resolve) => rl.once("close", () => resolve()));
+    // Drain normal EOF/exit input while compaction can still settle its view.
+    while (turnLoop !== null) await turnLoop;
+    await preservePending();
+  } finally {
+    onInterrupt();
+    stopPump = true;
+    pumpAbort.abort();
+    wakePump();
+    await turnLoop;
+    await pumping;
+    while (busy.size > 0) await idleWait(pumpVersion);
+    await commitTurn(); // include durable tree saves completed during shutdown
+    process.off("SIGINT", onInterrupt);
+    rl.close();
+  }
+}
+} catch (err) {
+  console.error(`optchat: ${errText(err)}`);
+  process.exitCode = 1;
+} finally {
   await lock.release();
 }

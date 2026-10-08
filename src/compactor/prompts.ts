@@ -145,7 +145,7 @@ ${kind}: ${text}`;
 // Step for a merge: the two child lines, already single lines (newlines are
 // flattened to spaces here), no ids.
 export function buildMergeStep(a: string, b: string): string {
-  const flatten = (s: string): string => s.replace(/\n/g, " ");
+  const flatten = (s: string): string => s.replace(/\r\n?|\n/g, " ");
   return `A real summary line of exactly ${NODE} bytes, for scale:
 ${SCALE_LINE}
 
@@ -171,15 +171,13 @@ function sliceSurrogateSafe(s: string, start: number, end: number): string {
 
 // Cap one tool result: kept whole when short, else head + cut note + tail.
 // The returned text is never longer than CAP characters.
-export function capToolResult(text: string): { text: string; truncated: boolean } {
-  if (text.length <= CAP) return { text, truncated: false };
+export function capToolResult(text: string): string {
+  if (text.length <= CAP) return text;
   const reserve = cutNote(text.length).length; // digit count only shrinks
   const room = Math.max(0, CAP - reserve);
   const head = Math.floor(room / 2);
   const tail = room - head;
-  const note = cutNote(text.length - head - tail);
-  return {
-    text: sliceSurrogateSafe(text, 0, head) + note + sliceSurrogateSafe(text, text.length - tail, text.length),
-    truncated: true,
-  };
+  const first = sliceSurrogateSafe(text, 0, head);
+  const last = sliceSurrogateSafe(text, text.length - tail, text.length);
+  return first + cutNote(text.length - first.length - last.length) + last;
 }

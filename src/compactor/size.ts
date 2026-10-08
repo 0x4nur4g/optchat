@@ -9,22 +9,19 @@ export function cutAtBytes(s: string, limit: number): string {
   if (limit <= 0) return "";
   if (byteLen(s) <= limit) return s;
   const buf = Buffer.from(s, "utf8");
-  let cut = buf.subarray(0, limit).toString("utf8");
-  if (cut.endsWith("\uFFFD")) cut = cut.slice(0, -1); // cut fell inside a character
-  return cut;
+  let end = Math.floor(limit);
+  while (end > 0 && (buf[end]! & 0xc0) === 0x80) end--;
+  return buf.subarray(0, end).toString("utf8");
 }
 
-// Shortest line by UTF-8 bytes that stays within `limit`. If every line is
-// over, returns the shortest one anyway: a stubborn node keeps its best try.
+// Shortest line by UTF-8 bytes, including when every line exceeds the target.
+// A shortest line is always under the target whenever any candidate is.
 // Empty entries are ignored (an empty line fails the node elsewhere).
-export function shortestUnder(lines: string[], limit: number): string {
-  if (lines.length === 0) return "";
-  const nonEmpty = lines.filter((l) => l.length > 0);
-  const pool = nonEmpty.length > 0 ? nonEmpty : lines;
-  const under = pool.filter((l) => byteLen(l) <= limit);
-  const pick = under.length > 0 ? under : pool;
-  let best = pick[0]!;
-  for (const line of pick) if (byteLen(line) < byteLen(best)) best = line;
+export function shortestUnder(lines: string[], _limit: number): string {
+  let best = "";
+  for (const line of lines) {
+    if (line !== "" && (best === "" || byteLen(line) < byteLen(best))) best = line;
+  }
   return best;
 }
 

@@ -1,6 +1,6 @@
 // Incremental view fold. The view is a list of parts tiling [0, T): each part
 // is a tree node (l, i) covering messages [id, id+n), with id = i*2^l and
-// n = 2^l. Leaves (n = 1) are raw messages. A parent may replace two adjacent
+// n = 2^l. Leaves (n = 1) summarize one message. A parent may replace two adjacent
 // same-level parts only once its summary is built. Pure module: no I/O.
 
 import { VIEW } from "../constants";
@@ -31,7 +31,12 @@ export function initialView(): Part[] {
  */
 export function appendAndFit(view: Part[], T: number, sizes: SizeOf, isBuilt: IsBuilt): Part[] {
   if (T <= 0) return view.slice();
-  const parts = [...view, { l: 0, i: T - 1, id: T - 1, n: 1 }];
+  return fit([...view, { l: 0, i: T - 1, id: T - 1, n: 1 }], T, sizes, isBuilt);
+}
+
+/** Fit an existing view by merging only; never append, replay or split parts. */
+export function fit(view: Part[], T: number, sizes: SizeOf, isBuilt: IsBuilt): Part[] {
+  const parts = view.slice();
   while (sumBytes(parts, sizes) > VIEW) {
     const k = bestPair(parts, T, isBuilt);
     if (k < 0) break;

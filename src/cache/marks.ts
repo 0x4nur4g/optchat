@@ -1,6 +1,7 @@
 // Split a rendered view at cache breakpoints. Each breakpoint is a character
-// offset; a cut lands on the last line end before its mark, so no cached piece
-// ends mid-line. A mark at or past the end of the text is skipped.
+// offset (UTF-16, not bytes); cuts land after a newline and never split a
+// surrogate pair. A mark at or past the end is skipped. These pieces preserve
+// request prefixes; they do not set vendor cache flags or prove cache hits.
 
 import { MARKS } from "../constants";
 

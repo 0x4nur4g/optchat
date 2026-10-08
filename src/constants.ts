@@ -7,7 +7,6 @@ export const CAP = 30_000; // max chars of tool result kept
 export const MARKS = [50_000, 80_000, 100_000]; // cache breakpoints (chars)
 
 export const SCOPES = ["global"] as const;
-export type Scope = string;
 
 export type Kind = "user" | "talk" | "tool" | "echo" | "note";
 

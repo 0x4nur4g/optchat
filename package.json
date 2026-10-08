@@ -4,6 +4,7 @@
   "description": "OptChat: endless chat where the chat history is the memory (compressed binary tree). Standalone core first.",
   "type": "module",
   "private": true,
+  "packageManager": "bun@1.4.0",
   "scripts": {
     "start": "bun run src/cli.ts",
     "test": "bun test",

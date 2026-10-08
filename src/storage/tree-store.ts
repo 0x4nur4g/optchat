@@ -1,22 +1,28 @@
-import { mkdir, open, readdir, readFile } from "node:fs/promises";
 import * as path from "node:path";
-import { type TreeNode } from "../constants";
+import { byteLen, type TreeNode } from "../constants";
+import { nodeKey } from "../tree/address";
+import { appendRecord, dayName, readRecords, validateScope } from "./jsonl";
 
-const DAY_RE = /^\d{4}-\d{2}-\d{2}\.jsonl$/;
+export { nodeKey } from "../tree/address";
+
+function isNode(value: unknown): value is TreeNode {
+  if (value === null || typeof value !== "object") return false;
+  const node = value as Partial<TreeNode>;
+  return typeof node.l === "number" && Number.isSafeInteger(node.l) && node.l >= 0 && node.l <= 52 &&
+    typeof node.i === "number" && Number.isSafeInteger(node.i) && node.i >= 0 &&
+    Number.isSafeInteger((node.i + 1) * 2 ** node.l) &&
+    typeof node.text === "string" && node.size === byteLen(node.text);
+}
 
 /** Directory holding tree nodes for a scope: <base>/tree/<scope> */
 function treeDir(base: string, scope: string): string {
+  validateScope(scope);
   return path.join(base, "tree", scope);
 }
 
-/** Day file for an ISO date or time: <base>/tree/<scope>/YYYY-MM-DD.jsonl */
+/** Local write-day file: <base>/tree/<scope>/YYYY-MM-DD.jsonl */
 function dayFile(base: string, scope: string, dateISO: string): string {
-  return path.join(treeDir(base, scope), dateISO.slice(0, 10) + ".jsonl");
-}
-
-/** Map key for a node position. */
-export function nodeKey(l: number, i: number): string {
-  return `${l}:${i}`;
+  return path.join(treeDir(base, scope), dayName(dateISO));
 }
 
 /** Append one tree node ({l,i,text,size}) to today's file, fsync. */
@@ -25,18 +31,10 @@ export async function saveNode(
   scope: string,
   node: TreeNode,
 ): Promise<void> {
-  const dir = treeDir(base, scope);
-  await mkdir(dir, { recursive: true });
-  const line =
-    JSON.stringify({ l: node.l, i: node.i, text: node.text, size: node.size }) +
-    "\n";
-  const fh = await open(dayFile(base, scope, new Date().toISOString()), "a");
-  try {
-    await fh.write(line);
-    await fh.sync();
-  } finally {
-    await fh.close();
-  }
+  if (!isNode(node)) throw new Error("optchat: invalid tree node");
+  await appendRecord(dayFile(base, scope, new Date().toISOString()), {
+    l: node.l, i: node.i, text: node.text, size: node.size,
+  });
 }
 
 /** Load every node, keyed `${l}:${i}`. Later files win on duplicate keys. */
@@ -44,36 +42,13 @@ export async function loadAllNodes(
   base: string,
   scope: string,
 ): Promise<Map<string, TreeNode>> {
-  const dir = treeDir(base, scope);
-  let names: string[];
-  try {
-    names = await readdir(dir);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return new Map();
-    throw err;
-  }
   const map = new Map<string, TreeNode>();
-  for (const name of names.filter((n) => DAY_RE.test(n)).sort()) {
-    const file = path.join(dir, name);
-    const raw = await readFile(file, "utf8");
-    for (const line of raw.split("\n")) {
-      if (line.trim() === "") continue;
-      try {
-        const node = JSON.parse(line) as TreeNode;
-        map.set(nodeKey(node.l, node.i), node);
-      } catch {
-        console.warn(`optchat: skipping torn line in ${file}`);
-      }
+  for await (const { value, file, line } of readRecords(treeDir(base, scope))) {
+    if (!isNode(value)) {
+      console.warn(`optchat: skipping invalid tree record in ${file}:${line}`);
+      continue;
     }
+    map.set(nodeKey(value.l, value.i), value);
   }
   return map;
-}
-
-/** True when the map holds level l, index i. */
-export function hasNode(
-  map: Map<string, TreeNode>,
-  l: number,
-  i: number,
-): boolean {
-  return map.has(nodeKey(l, i));
 }

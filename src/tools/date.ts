@@ -16,6 +16,7 @@ export function dateOf(iso: string): string {
 
 /** date(id): local time of the line, or "No line id." when the id is unknown. */
 export function lookup(getDate: (id: number) => string | null, id: number): string {
+  if (!Number.isSafeInteger(id) || id < 0) return `No line ${id}.`;
   const iso = getDate(id);
   return iso === null ? `No line ${id}.` : dateOf(iso);
 }

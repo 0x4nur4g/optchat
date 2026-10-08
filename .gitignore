@@ -3,5 +3,7 @@ dist/
 /chat/
 /tree/
 /data/
+.env
+.env.*
 *.log
 .DS_Store

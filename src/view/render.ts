@@ -1,9 +1,10 @@
 // Render the view as the <chat> block of a fresh call.
-// One row per part: `id+n|text`. A row is a summary, a raw message (leaf), or
+// One row per part: `id+n|text`. A row is a stored summary (also at leaves), or
 // a placeholder when the node is not built yet. Newlines inside text become
 // single spaces so every row stays one line.
 
 import type { Part } from "./fold";
+import { formatAddress } from "../tree/address";
 
 /** Text of a part, or null/undefined when the node has no summary yet. */
 export type GetText = (part: Part) => string | undefined | null;
@@ -38,9 +39,9 @@ function row(part: Part, getText: GetText): string {
   const body = text === undefined || text === null ? NOT_BUILT : squeeze(text);
   // In a valid view an unbuilt part is always a leaf (n = 1), so its
   // placeholder row reads `id+1|...` like a raw message row.
-  return `${part.id}+${part.n}|${body}`;
+  return `${formatAddress(part.id, part.n)}|${body}`;
 }
 
 function squeeze(text: string): string {
-  return text.replace(/\r?\n/g, " ");
+  return text.replace(/\r\n?|\n/g, " ");
 }
