@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { tempPath } from "./tmp";
 import * as path from "node:path";
 import { type LogMessage } from "../src/constants";
 import { dayFile, loadAll, openLog } from "../src/storage/log";
@@ -7,7 +8,7 @@ import { loadAllNodes, saveNode } from "../src/storage/tree-store";
 
 let base: string;
 beforeEach(async () => {
-  base = await mkdtemp("/tmp/opencode/optchat-storage-");
+  base = await mkdtemp(tempPath("optchat-storage-"));
 });
 afterEach(async () => {
   await rm(base, { recursive: true, force: true });

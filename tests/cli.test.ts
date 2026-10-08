@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { appendFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tempPath } from "./tmp";
 import * as path from "node:path";
 import { dayFile, loadAll, openLog } from "../src/storage/log";
 import { saveNode } from "../src/storage/tree-store";
@@ -12,7 +13,7 @@ const children: ReturnType<typeof Bun.spawn>[] = [];
 const servers: ReturnType<typeof Bun.serve>[] = [];
 
 async function fixture(): Promise<string> {
-  const dir = await mkdtemp("/tmp/opencode/optchat-cli-");
+  const dir = await mkdtemp(tempPath("optchat-cli-"));
   fixtures.push(dir);
   return dir;
 }

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tempPath } from "./tmp";
 import { connect } from "node:net";
 import * as path from "node:path";
 import { acquireLock, type LockHandle } from "../src/storage/lock";
@@ -53,7 +54,7 @@ async function crashWriter() {
   await writer.child.exited;
 }
 beforeEach(async () => {
-  dir = await mkdtemp("/tmp/opencode/optchat-lock-");
+  dir = await mkdtemp(tempPath("optchat-lock-"));
 });
 afterEach(async () => {
   await Promise.all(children.splice(0).map(async ({ child }) => {
