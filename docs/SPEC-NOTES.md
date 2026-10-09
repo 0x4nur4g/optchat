@@ -97,6 +97,47 @@ the tree. Back up both. Do not publish chat data, credentials, or personal ident
 traces with the source release. URL diagnostics retain only scheme, host, and path;
 strip userinfo and all query parameters before reporting them.
 
+## ChatGPT plan usage
+
+`--login` runs OpenAI's Sign in with ChatGPT and spends a ChatGPT plan instead
+of per-token API fees. It is a public OAuth client: no client secret, no API key.
+
+- Authorization: `auth.openai.com/api/accounts/authorize`. Token exchange and
+  refresh: `auth.openai.com/api/accounts/oauth/token`.
+- First registration sends `client_id=dynamic_agent_client`. The callback
+  returns the issued `client_id`, which is what gets stored. The registration
+  entrypoint is never saved as the connection's id.
+- The redirect URI is `http://127.0.0.1:<port>/auth/callback`. Only the port may
+  vary; scheme, host and path are fixed, and `localhost` must not be substituted.
+- Scopes: `openid profile email offline_access resource.invoke
+  chatgpt.tokens.use.direct`. The last one is what authorises plan usage, and its
+  presence in the granted scopes is checked before anything is stored.
+- PKCE S256, fresh `state` and `nonce` per attempt. The ID token is verified
+  against OpenAI's published JWKS: signature, issuer, audience (the issued client
+  id), expiry and nonce.
+- The host identifier is an opaque URN persisted once per host. It must never
+  encode an email, user id, or other identifying value.
+- Access tokens last one hour; refresh tokens last 30 days and rotate on every
+  successful refresh. The rotating refresh token replaces the old one together
+  with the access token and scopes.
+- Credentials are stored owner-only outside the chat data directory.
+
+Inference on this route uses the **Responses API**, which differs from the
+Chat Completions adapter in hard ways:
+
+| Requirement | Note |
+| --- | --- |
+| `store: false`, `stream: true` | Both mandatory on every request |
+| System text in `instructions` | A system-role input item is rejected |
+| Full history in `input` | `previous_response_id` is not allowed |
+| Tools as an `additional_tools` input item | `role: "developer"` with a `tools` array |
+| No `temperature`, `top_p`, `user`, `metadata`, `truncation` | Rejected outright |
+
+Success is only `response.completed`. `response.failed` can carry
+`subscription_sharing_usage_limit_exceeded` or
+`subscription_sharing_usage_unavailable`, and `response.incomplete` is a
+separate case. Provider bodies are never echoed.
+
 ## Cache and test evidence
 
 This adapter uses native Chat Completions, not the reference's Responses API or

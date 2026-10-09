@@ -18,9 +18,13 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import * as path from "node:path";
+import { homedir } from "node:os";
 import { SCOPES, byteLen } from "./constants";
 import type { Kind, TreeNode } from "./constants";
 import { OpenAICompat, readEnv, redactUrl } from "./model/openai-compat";
+import { OpenAIResponses, listModels } from "./model/openai-responses";
+import { login, refreshIfDue } from "./auth/login";
+import { loadCredentials } from "./auth/credentials";
 import { openLog } from "./storage/log";
 import { capture } from "./storage/capture";
 import { acquireLock } from "./storage/lock";
@@ -45,15 +49,25 @@ function arg(name: string, fallback: string): string {
 }
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
-  console.log(`Usage: optchat [--scope global] [--dir ./data] [--instructions FILE] [--print-view] [--capture] [--git]
+  console.log(`Usage: optchat [options]
 
---print-view    Print stored memory and exit without a model.
---capture       Append one message from stdin or --text and exit. No model needed.
---instructions Read FILE once at startup (default: <dir>/instructions.md, if present).
---git          Commit chat/tree data after each turn in a separate data repository.
---help         Show this help without creating data or taking a lock.
+--scope KEY        Memory scope. Only global is supported today.
+--dir PATH         Data directory (default ./data).
+--print-view       Print stored memory and exit without a model.
+--capture          Append one message and exit. No model needed.
+--kind KIND        With --capture: user, talk, tool, echo or note (default user).
+--text TEXT        With --capture: the message. Without it, the message is read from stdin.
+--login            Sign in with ChatGPT and store the credential, then exit.
+--models           List model slugs the signed-in plan can run, then exit.
+--plan             Use the signed-in ChatGPT plan instead of an API key.
+--model SLUG       With --plan: which model to run.
+--auth-dir PATH    Where credentials live (default ~/.config/optchat/auth).
+--instructions F   Read F once at startup (default <dir>/instructions.md, if present).
+--git              Commit chat/tree data after each turn in a separate data repository.
+--help             Show this help without creating data or taking a lock.
 
-Interactive mode requires OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL.
+Interactive mode requires OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL,
+or --plan with a prior --login and --model.
 /cancel cancels the current turn. /exit or /quit drains input and exits.
 Ctrl+C cancels work, preserves queued input, and exits.`);
   process.exit(0);
@@ -63,6 +77,9 @@ const scope = arg("--scope", SCOPES[0]);
 const dir = arg("--dir", "./data");
 const printView = process.argv.includes("--print-view");
 const gitPersistence = process.argv.includes("--git");
+const planMode = process.argv.includes("--plan");
+const authDir = arg("--auth-dir", path.join(homedir(), ".config", "optchat", "auth"));
+const planModel = arg("--model", "");
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -98,14 +115,65 @@ if (process.argv.includes("--capture")) {
   }
 }
 
+// --login: Sign in with ChatGPT. Runs before any model configuration is read
+// and never takes the memory lock, since it writes only to the auth directory.
+if (process.argv.includes("--login")) {
+  try {
+    await login({
+      authDir,
+      agentName: "optchat",
+      onAuthorizeUrl: (url) => {
+        // The authorization URL carries no secret: the PKCE verifier stays
+        // local and only the public challenge travels.
+        console.log("optchat: open this to sign in:");
+        console.log(url);
+      },
+    });
+    // No account identifier is printed: credentials are sensitive and the
+    // terminal may be logged or shared.
+    console.log(`optchat: signed in; credential stored under ${authDir}`);
+  } catch (err) {
+    console.error(`optchat: ${errText(err)}`);
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
+// --models: what the signed-in plan can actually run. Prints slugs, which are
+// what --model takes. No account identifier is printed.
+if (process.argv.includes("--models")) {
+  try {
+    const records = await loadCredentials(authDir);
+    const record = records[0];
+    if (record === undefined) {
+      throw new Error("optchat: no ChatGPT credential; run optchat --login first");
+    }
+    const refreshed = await refreshIfDue(record, { authDir });
+    const token = (refreshed ?? record).access_token;
+    for (const model of await listModels(async () => token)) {
+      console.log(`${model.slug}\t${model.displayName}`);
+    }
+    process.exit(0);
+  } catch (err) {
+    console.error(`optchat: ${errText(err)}`);
+    process.exit(1);
+  }
+}
+
 let env: ReturnType<typeof readEnv> = null;
 try {
-  if (!printView) env = readEnv();
+  if (!printView && !planMode) env = readEnv();
 } catch (err) {
   console.error(`optchat: ${errText(err)}`);
   process.exit(1);
 }
-if (!printView && env === null) {
+if (planMode) {
+  // Plan usage carries no API key. The model comes from --model or OPENAI_MODEL.
+  if (!printView && planModel === "" && !process.env["OPENAI_MODEL"]?.trim()) {
+    console.error("optchat: --plan needs --model or OPENAI_MODEL");
+    process.exit(1);
+  }
+} else if (!printView && env === null) {
   console.error("optchat: OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required for interactive mode");
   process.exit(1);
 }
@@ -208,16 +276,36 @@ function runTool(name: string, input: Record<string, unknown>): string {
 const queue: string[] = [];
 const actorPending: string[] = [];
 let activeTurn: AbortController | null = null;
-const model = env === null ? null : new OpenAICompat(env, {
-  tools: TOOL_DEFINITIONS,
-  runTool,
-  takePending: () => {
-    if (activeTurn?.signal.aborted) return [];
-    const pending = queue.splice(0);
-    actorPending.push(...pending); // retain until each delivered user is fsynced
-    return pending;
-  },
-});
+
+const takePending = (): string[] => {
+  if (activeTurn?.signal.aborted) return [];
+  const pending = queue.splice(0);
+  actorPending.push(...pending); // retain until each delivered user is fsynced
+  return pending;
+};
+
+/** Current plan access token, refreshed first when it is near expiry. */
+async function planToken(): Promise<string> {
+  const records = await loadCredentials(authDir);
+  const record = records[0];
+  if (record === undefined) {
+    throw new Error("optchat: no ChatGPT credential; run optchat --login first");
+  }
+  const refreshed = await refreshIfDue(record, { authDir });
+  return (refreshed ?? record).access_token;
+}
+
+const model = planMode
+  ? new OpenAIResponses({
+      getAccessToken: planToken,
+      model: planModel !== "" ? planModel : (process.env["OPENAI_MODEL"] ?? ""),
+      tools: TOOL_DEFINITIONS,
+      runTool,
+      takePending,
+    })
+  : env === null
+    ? null
+    : new OpenAICompat(env, { tools: TOOL_DEFINITIONS, runTool, takePending });
 if (!printView && env !== null) {
   const url = new URL(env.baseUrl);
   const redacted = url.username !== "" || url.password !== "" || url.search !== "";

@@ -87,6 +87,28 @@ export async function loadCredential(
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw err;
   }
+  return parse(raw);
+}
+
+/** Every saved account, for callers that do not know which one signed in. */
+export async function loadCredentials(dir: string): Promise<CredentialRecord[]> {
+  const { readdir } = await import("node:fs/promises");
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return [];
+  }
+  const records: CredentialRecord[] = [];
+  for (const name of names.filter((n) => n.endsWith(".json")).sort()) {
+    const clientId = name.slice(0, -".json".length);
+    const record = await loadCredential(dir, clientId).catch(() => null);
+    if (record !== null) records.push(record);
+  }
+  return records;
+}
+
+function parse(raw: string): CredentialRecord {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);

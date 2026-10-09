@@ -85,6 +85,39 @@ response, not token by token.
 `/cancel` cancels the active turn. Ctrl+C cancels work and preserves queued input.
 `--print-view` displays stored state; it is not a live-provider verification.
 
+## Sign in with ChatGPT
+
+Instead of an API key you can spend a ChatGPT Plus or Pro plan. This uses OpenAI's
+Sign in with ChatGPT, a public OAuth client with no API key and no client secret.
+
+```sh
+optchat --login                 # opens a browser, prints the sign-in URL too
+optchat --models                # list the model slugs your plan can run
+optchat --plan --model SLUG     # run on the plan
+```
+
+`--login` prints the authorization URL as well as opening a browser, so it works
+on a headless host. Copy the URL to any machine, sign in, and the result returns
+to the listening CLI.
+
+Credentials are stored under `~/.config/optchat/auth` by default (`--auth-dir`
+overrides it), as owner-only files. They are deliberately **not** in the chat
+data directory: chat backups get copied around, and OAuth tokens must never
+travel with them. Access tokens last one hour and refresh automatically before
+they expire; refresh tokens rotate on every use.
+
+Two constraints come with this route:
+
+- Plan usage speaks the **Responses API**, not Chat Completions. The adapter
+  sends `store: false` and `stream: true` as that route requires, and resends the
+  full history every request.
+- Plan usage is granted per scope. If you did not approve plan access during
+  sign-in, `--login` reports it rather than storing a credential that cannot run.
+
+No live-provider claim is made here. The flow is verified against an offline
+stand-in that exercises code exchange, ID-token verification, and credential
+storage.
+
 ## Memory and storage
 
 Under `--dir`, the log uses `chat/global/main/YYYY-MM-DD.jsonl`; the tree uses
@@ -151,7 +184,9 @@ CI runs these checks after a frozen-lockfile install. The package remains privat
 - `src/tree/` address math `id+n`
 - `src/view/` incremental fold + render
 - `src/compactor/` pump order + prompts (original) + size loop
-- `src/model/` native Chat Completions adapter
+- `src/model/` Chat Completions and ChatGPT plan adapters
+- `src/auth/` Sign in with ChatGPT: PKCE, host identity, credentials
+- `src/mcp/` MCP protocol core for the recall path
 - `src/turn/` fresh-turn orchestration
 - `src/tools/` zoom + date
 - `src/cache/` stable view splitter
