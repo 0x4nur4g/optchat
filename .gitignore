@@ -3,6 +3,7 @@ dist/
 /chat/
 /tree/
 /data/
+.scratch/
 .env
 .env.*
 *.log

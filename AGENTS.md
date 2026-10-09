@@ -19,3 +19,20 @@ Project rules for agents working in this repo.
 10. Verify with `bun test` for logic changes and `tsc --noEmit` for type changes.
 
 Before changing memory, model requests, or storage behavior, read `docs/SPEC-NOTES.md`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are GitHub issues in this repo, operated through the `gh` CLI.
+See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical triage roles, with label strings equal to their role names.
+See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root, created lazily
+when a term or decision is actually resolved. See `docs/agents/domain.md`.
