@@ -47,6 +47,10 @@ bun link
 optchat --help
 ```
 
+`bun link` installs `optchat` into `~/.bun/bin`. That directory must be on `PATH`
+for the last command to resolve. The official Bun installer adds it. If Bun was
+installed another way, add `~/.bun/bin` to `PATH` first.
+
 For continuous use, run on an always-on Linux host in a persistent terminal session.
 Attach to that session as needed.
 
