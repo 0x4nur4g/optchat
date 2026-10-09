@@ -22,6 +22,7 @@ import { SCOPES, byteLen } from "./constants";
 import type { Kind, TreeNode } from "./constants";
 import { OpenAICompat, readEnv, redactUrl } from "./model/openai-compat";
 import { openLog } from "./storage/log";
+import { capture } from "./storage/capture";
 import { acquireLock } from "./storage/lock";
 import type { LockHandle } from "./storage/lock";
 import { loadAllNodes, saveNode } from "./storage/tree-store";
@@ -44,9 +45,10 @@ function arg(name: string, fallback: string): string {
 }
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
-  console.log(`Usage: optchat [--scope global] [--dir ./data] [--instructions FILE] [--print-view] [--git]
+  console.log(`Usage: optchat [--scope global] [--dir ./data] [--instructions FILE] [--print-view] [--capture] [--git]
 
 --print-view    Print stored memory and exit without a model.
+--capture       Append one message from stdin or --text and exit. No model needed.
 --instructions Read FILE once at startup (default: <dir>/instructions.md, if present).
 --git          Commit chat/tree data after each turn in a separate data repository.
 --help         Show this help without creating data or taking a lock.
@@ -72,6 +74,30 @@ if (!(SCOPES as readonly string[]).includes(scope)) {
   console.error("optchat: only scope global is supported");
   process.exit(1);
 }
+
+// --capture: deterministic ingest for hooks in other tools. Runs before any
+// model configuration is read, so capture never depends on a provider or on
+// the model choosing to remember.
+if (process.argv.includes("--capture")) {
+  const kind = arg("--kind", "user") as Kind;
+  let text: string;
+  if (process.argv.includes("--text")) {
+    text = arg("--text", "");
+  } else {
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk as Uint8Array));
+    text = Buffer.concat(chunks).toString("utf8");
+  }
+  try {
+    const message = await capture(dir, scope, kind, text);
+    console.log(message.i);
+    process.exit(0);
+  } catch (err) {
+    console.error(`optchat: ${errText(err)}`);
+    process.exit(1);
+  }
+}
+
 let env: ReturnType<typeof readEnv> = null;
 try {
   if (!printView) env = readEnv();
