@@ -39,13 +39,18 @@ deferred. Import and HTML helpers in `src/` are not installed CLI commands.
 ## Install and run
 
 Linux is the currently supported runtime. Use Bun 1.4.0, the version pinned for CI.
-The writer lock requires Linux abstract Unix sockets. Install from this checkout:
+The writer lock requires Linux abstract Unix sockets.
 
 ```sh
+git clone https://github.com/0x4nur4g/optchat.git
+cd optchat
 bun install --frozen-lockfile
 bun link
 optchat --help
 ```
+
+No `bun install -g` here. The package is marked private and is not published to a
+registry, so cloning and linking is the supported install.
 
 `bun link` installs `optchat` into `~/.bun/bin`. That directory must be on `PATH`
 for the last command to resolve. The official Bun installer adds it. If Bun was
