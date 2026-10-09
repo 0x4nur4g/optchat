@@ -24,7 +24,7 @@ import type { Kind, TreeNode } from "./constants";
 import { OpenAICompat, readEnv, redactUrl } from "./model/openai-compat";
 import { OpenAIResponses, listModels } from "./model/openai-responses";
 import { login, refreshIfDue } from "./auth/login";
-import { loadCredentials } from "./auth/credentials";
+import { loadCredentials, loadPlanModel, savePlanModel } from "./auth/credentials";
 import { openLog } from "./storage/log";
 import { capture } from "./storage/capture";
 import { acquireLock } from "./storage/lock";
@@ -167,16 +167,49 @@ try {
   console.error(`optchat: ${errText(err)}`);
   process.exit(1);
 }
-if (planMode) {
-  // Plan usage carries no API key. The model comes from --model or OPENAI_MODEL.
-  if (!printView && planModel === "" && !process.env["OPENAI_MODEL"]?.trim()) {
-    console.error("optchat: --plan needs --model or OPENAI_MODEL");
-    process.exit(1);
+/** Current plan access token, refreshed first when it is near expiry. */
+async function planToken(): Promise<string> {
+  const records = await loadCredentials(authDir);
+  const record = records[0];
+  if (record === undefined) {
+    throw new Error("optchat: no ChatGPT credential; run optchat --login first");
   }
-} else if (!printView && env === null) {
-  console.error("optchat: OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required for interactive mode");
+  const refreshed = await refreshIfDue(record, { authDir });
+  return (refreshed ?? record).access_token;
+}
+
+// A saved credential is enough to run, so signing in is the only setup step.
+// Plan is used automatically when no API key is configured.
+const rememberedModel = await loadPlanModel(authDir);
+const hasCredential = (await loadCredentials(authDir)).length > 0;
+const usePlan = planMode || (env === null && hasCredential);
+let modelChoice = "";
+const resolvedModel = planModel !== ""
+  ? planModel
+  : (rememberedModel ?? process.env["OPENAI_MODEL"]?.trim() ?? "");
+
+if (!printView && !usePlan && env === null) {
+  console.error("optchat: OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required for interactive mode, or run optchat --login");
   process.exit(1);
 }
+if (!printView && usePlan && resolvedModel === "") {
+  // No model chosen yet: take the first the plan exposes, so signing in is the
+  // only setup step. Reported, and changeable with --plan --model.
+  try {
+    const models = await listModels(planToken);
+    if (models.length === 0) throw new Error("optchat: this plan exposes no models");
+    modelChoice = models[0]!.slug;
+    await savePlanModel(authDir, modelChoice);
+    console.error(`optchat: using model ${modelChoice}; change with optchat --plan --model SLUG`);
+  } catch (err) {
+    console.error(`optchat: ${errText(err)}`);
+    process.exit(1);
+  }
+} else {
+  modelChoice = resolvedModel;
+}
+// Remember an explicit choice so later plain runs work.
+if (usePlan && planModel !== "") await savePlanModel(authDir, planModel);
 
 let system = TURN_SYSTEM;
 if (!printView) {
@@ -284,21 +317,10 @@ const takePending = (): string[] => {
   return pending;
 };
 
-/** Current plan access token, refreshed first when it is near expiry. */
-async function planToken(): Promise<string> {
-  const records = await loadCredentials(authDir);
-  const record = records[0];
-  if (record === undefined) {
-    throw new Error("optchat: no ChatGPT credential; run optchat --login first");
-  }
-  const refreshed = await refreshIfDue(record, { authDir });
-  return (refreshed ?? record).access_token;
-}
-
-const model = planMode
+const model = usePlan
   ? new OpenAIResponses({
       getAccessToken: planToken,
-      model: planModel !== "" ? planModel : (process.env["OPENAI_MODEL"] ?? ""),
+      model: modelChoice,
       tools: TOOL_DEFINITIONS,
       runTool,
       takePending,

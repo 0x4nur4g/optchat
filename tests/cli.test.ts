@@ -21,7 +21,9 @@ async function fixture(): Promise<string> {
 function start(dir: string, args: string[] = [], env: Record<string, string> = {}, entry = cli) {
   const inherited = { ...process.env };
   for (const key of Object.keys(inherited)) if (key.startsWith("GIT_")) delete inherited[key];
-  const child = Bun.spawn([process.execPath, entry, "--dir", dir, ...args], {
+  const child = Bun.spawn(
+    [process.execPath, entry, "--dir", dir, "--auth-dir", path.join(dir, "auth-test"), ...args],
+    {
     cwd: existsSync(dir) ? dir : path.dirname(dir),
     env: {
       ...inherited,

@@ -108,6 +108,26 @@ export async function loadCredentials(dir: string): Promise<CredentialRecord[]> 
   return records;
 }
 
+/** The model chosen for plan runs, remembered so a later plain run just works. */
+export async function savePlanModel(dir: string, model: string): Promise<void> {
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const file = path.join(dir, "plan.json");
+  const tmp = `${file}.${process.pid}.tmp`;
+  await writeFile(tmp, `${JSON.stringify({ model })}\n`, { mode: 0o600 });
+  await rename(tmp, file);
+}
+
+/** The remembered plan model, or null when none was chosen yet. */
+export async function loadPlanModel(dir: string): Promise<string | null> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(path.join(dir, "plan.json"), "utf8"));
+    const model = (parsed as { model?: unknown }).model;
+    return typeof model === "string" && model.length > 0 ? model : null;
+  } catch {
+    return null;
+  }
+}
+
 function parse(raw: string): CredentialRecord {
   let parsed: unknown;
   try {
