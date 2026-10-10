@@ -148,7 +148,14 @@ export class OpenAICompat implements TurnAdapter, CompactionAdapter {
     return {
       reply: async (feedback) => {
         if (feedback !== undefined) messages.push({ role: "user", content: feedback });
-        const message = await this.chat(messages, this.env.compactorModel ?? this.env.model, signal);
+        // Same tools as a turn, never called here. Sending them is what makes
+        // this request's prefix match the turns' cached one.
+        const message = await this.chat(
+          messages,
+          this.env.compactorModel ?? this.env.model,
+          signal,
+          this.tools,
+        );
         messages.push(message);
         const content = contentText(message);
         if (content === null) throw new Error("model reply had no content");

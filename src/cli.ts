@@ -31,8 +31,9 @@ import { acquireLock } from "./storage/lock";
 import type { LockHandle } from "./storage/lock";
 import { loadAllNodes, saveNode } from "./storage/tree-store";
 import { nodeKey } from "./tree/address";
-import { appendAndFit, fit, foldAll } from "./view/fold";
+import { appendAndFit, foldAll, sawtooth } from "./view/fold";
 import type { Part } from "./view/fold";
+import { loadView, saveView } from "./view/persist";
 import { renderView } from "./view/render";
 import { pumpOnce } from "./compactor/pump";
 import { runTurn, settle, TURN_SYSTEM } from "./turn/loop";
@@ -254,7 +255,37 @@ function getText(part: Part): string | undefined {
   return nodes.get(nodeKey(part.l, part.i))?.text;
 }
 
-let view: Part[] = foldAll(messages.length, sizeOf, isBuilt);
+/** Messages a saved view covers, or -1 when it does not tile from 0. */
+function coveredBy(view: Part[]): number {
+  let at = 0;
+  for (const part of view) {
+    if (part.id !== at) return -1;
+    at += part.n;
+  }
+  return at;
+}
+
+/**
+ * Resume the saved view rather than rebuilding it. A rebuilt tiling differs
+ * from the live one, and that difference alone invalidates every cached
+ * prefix already paid for. Only a view that cannot be trusted is rebuilt.
+ */
+async function resumeView(): Promise<Part[]> {
+  const saved = await loadView(dir, scope);
+  const covered = saved === null ? -1 : coveredBy(saved);
+  if (covered >= 0 && covered <= messages.length) {
+    let resumed = saved!;
+    // A crash between a message append and this save leaves the view short;
+    // append the missing leaves rather than throwing the tiling away.
+    for (let t = covered; t < messages.length; t++) {
+      resumed = appendAndFit(resumed, t + 1, sizeOf, isBuilt);
+    }
+    return resumed;
+  }
+  return foldAll(messages.length, sizeOf, isBuilt);
+}
+
+let view: Part[] = await resumeView();
 
 function allBuilt(): boolean {
   return view.every((p) => isBuilt(p.l, p.i));
@@ -269,9 +300,12 @@ function fireFit(): void {
   for (const cb of waiters) cb();
 }
 
-/** Refit after a tree save: sizes changed, the fold may coarsen. */
+/** Refit after a tree save: sizes changed, and a batch may be able to finish. */
 function refit(): void {
-  view = fit(view, messages.length, sizeOf, isBuilt);
+  view = sawtooth(view, messages.length, sizeOf, isBuilt);
+  void saveView(dir, scope, view).catch((err) => {
+    console.error(`optchat: could not save the view: ${errText(err)}`);
+  });
   fireFit();
 }
 
@@ -430,6 +464,7 @@ async function log(kind: Kind, text: string): Promise<void> {
     return;
   }
   view = appendAndFit(view, messages.length, sizeOf, isBuilt);
+  await saveView(dir, scope, view);
   wakePump();
   console.log(`${kind}: ${text}`);
 }

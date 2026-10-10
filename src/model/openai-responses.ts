@@ -164,7 +164,9 @@ export class OpenAIResponses implements TurnAdapter, CompactionAdapter {
     system: string,
     signal?: AbortSignal,
   ): CompactionSession {
-    const input: InputItem[] = [{
+    // The same tool item as a turn, so the prefix matches the turns' cache.
+    // A compaction never calls a tool.
+    const input: InputItem[] = [...toolItems(this.options.tools ?? []), {
       role: "user",
       content: [
         { type: "input_text", text: `<chat>\n${contextLines.join("\n")}\n</chat>` },

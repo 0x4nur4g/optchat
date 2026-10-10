@@ -5,7 +5,7 @@ import { JOBS, NODE, RETRY_MS, TRIES, byteLen } from "../constants";
 import type { CompactionAdapter } from "../model/adapter";
 import { nodeKey } from "../tree/address";
 import type { IsBuilt, Part } from "../view/fold";
-import { COMPACT_SYSTEM, buildCompressStep, buildMergeStep } from "./prompts";
+import { SHARED_SYSTEM, buildCompressStep, buildMergeStep } from "./prompts";
 import { buildRetryMessage, cutAtBytes, shortestUnder } from "./size";
 
 export type { IsBuilt, Part } from "../view/fold";
@@ -129,7 +129,8 @@ async function runNode(opts: PumpOptions, c: Candidate): Promise<void> {
       const context = opts.context(c.l, c.i).map((line) => line.replace(/\r\n?|\n/g, " "));
       // One session retains raw replies. Only model output is flattened;
       // free sources keep their original newlines.
-      const session = opts.adapter.openCompaction(context, step, COMPACT_SYSTEM, opts.signal);
+      // Same system text as a turn, so this reads the turns' cached prefix.
+      const session = opts.adapter.openCompaction(context, step, SHARED_SYSTEM, opts.signal);
       const tries: string[] = [];
       let feedback: string | undefined;
       for (;;) {

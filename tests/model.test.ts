@@ -387,8 +387,10 @@ describe("compaction sessions", () => {
     ]);
     for (const request of requests) {
       expect(request.model).toBe("cheap-model");
-      expect(request.tools).toBeUndefined();
-      expect(request.parallel_tool_calls).toBeUndefined();
+      // A compaction carries the turn tools so it reads the turns' cached
+      // prefix. It never calls one.
+      expect(request.tools?.[0]?.function?.name).toBe("lookup");
+      expect(request.parallel_tool_calls).toBe(false);
       expect(JSON.stringify(request.messages)).not.toMatch(/\d+\+\d+\|/);
     }
   });

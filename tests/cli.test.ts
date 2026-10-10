@@ -75,6 +75,16 @@ type NativeRequest = {
   tools?: { type: string; function: { name: string } }[];
 };
 
+// A compaction and a turn now carry the same tools and system text, which is
+// what lets compactions reuse the turns' cached prefix. They are told apart by
+// the task instead: a compaction's second text block is the size-scale step.
+function isCompaction(body: NativeRequest): boolean {
+  const content = (body.messages as Array<{ content?: unknown }>)[1]?.content;
+  const parts = Array.isArray(content) ? content : [];
+  return parts.some((part) =>
+    String((part as { text?: unknown }).text ?? "").startsWith("A real summary line"));
+}
+
 function provider(respond: (body: NativeRequest) => Response | Promise<Response>) {
   const server = Bun.serve({
     hostname: "127.0.0.1", port: 0,
@@ -316,7 +326,7 @@ describe("offline native CLI", () => {
     const compactions: NativeRequest[] = [];
     let child!: ReturnType<typeof start>;
     const env = provider(async (body) => {
-      if (!body.tools) {
+      if (isCompaction(body)) {
         compactions.push(body);
         return reply({ content: "user: short memory; talk: answered" });
       }
@@ -392,7 +402,7 @@ describe("offline native CLI", () => {
     const asked = deferred<void>();
     const held = deferred<Response>();
     const env = provider((body) => {
-      if (!body.tools) return reply({ content: "short memory" });
+      if (isCompaction(body)) return reply({ content: "short memory" });
       asked.resolve();
       return held.promise;
     });
@@ -431,7 +441,7 @@ describe("offline native CLI", () => {
     const asked = deferred<void>();
     const held = deferred<Response>();
     const env = provider((body) => {
-      if (!body.tools) return reply({ content: "short memory" });
+      if (isCompaction(body)) return reply({ content: "short memory" });
       asked.resolve();
       return held.promise;
     });
@@ -450,7 +460,7 @@ describe("offline native CLI", () => {
     const dir = await fixture();
     let child!: ReturnType<typeof start>;
     const env = provider((body) => {
-      if (!body.tools) return reply({ content: "short memory" });
+      if (isCompaction(body)) return reply({ content: "short memory" });
       child.stdin.write("  still unanswered  \n");
       child.stdin.end();
       return new Response("offline failure", { status: 500 });
@@ -473,7 +483,7 @@ describe("offline native CLI", () => {
     let actorCalls = 0;
     let child!: ReturnType<typeof start>;
     const env = provider(async (body) => {
-      if (!body.tools) return reply({ content: "short memory" });
+      if (isCompaction(body)) return reply({ content: "short memory" });
       actorCalls++;
       if (actorCalls === 1) {
         child.stdin.write("  accepted at the tool boundary  \n");
@@ -523,7 +533,7 @@ describe("offline native CLI", () => {
     let compactions = 0;
     let child!: ReturnType<typeof start>;
     const env = provider(async (body) => {
-      if (!body.tools) {
+      if (isCompaction(body)) {
         compactions++;
         if (compactions === 1) return reply({ content: "P".repeat(512) });
         // A root request proves the older parent was saved and refitted.
@@ -560,7 +570,7 @@ describe("offline native CLI", () => {
     let actorCalls = 0;
     let compactions = 0;
     const env = provider((body) => {
-      if (body.tools) {
+      if (!isCompaction(body)) {
         actorCalls++;
         return reply({ content: "must not answer an unbuilt view" });
       }
@@ -588,7 +598,7 @@ describe("offline native CLI", () => {
     let child!: ReturnType<typeof start>;
     let actorCalls = 0;
     const env = provider((body) => {
-      if (body.tools) {
+      if (!isCompaction(body)) {
         actorCalls++;
         return reply({ content: "must not answer" });
       }

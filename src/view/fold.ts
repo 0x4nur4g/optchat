@@ -3,7 +3,7 @@
 // n = 2^l. Leaves (n = 1) summarize one message. A parent may replace two adjacent
 // same-level parts only once its summary is built. Pure module: no I/O.
 
-import { VIEW } from "../constants";
+import { LOW, VIEW } from "../constants";
 
 export interface Part {
   l: number;
@@ -24,20 +24,43 @@ export function initialView(): Part[] {
 }
 
 /**
- * Append the leaf for message T-1, then merge while the view exceeds VIEW bytes.
- * `view` must tile [0, T-1); use initialView() before the first message.
- * Merging replaces two adjacent same-level parts by their parent, largest
- * due first, as long as the parent is built. Stops when no merge is possible.
+ * Append the leaf for message T-1, then apply the sawtooth. `view` must tile
+ * [0, T-1); use initialView() before the first message.
  */
 export function appendAndFit(view: Part[], T: number, sizes: SizeOf, isBuilt: IsBuilt): Part[] {
   if (T <= 0) return view.slice();
-  return fit([...view, { l: 0, i: T - 1, id: T - 1, n: 1 }], T, sizes, isBuilt);
+  return sawtooth([...view, { l: 0, i: T - 1, id: T - 1, n: 1 }], T, sizes, isBuilt);
 }
 
-/** Fit an existing view by merging only; never append, replay or split parts. */
-export function fit(view: Part[], T: number, sizes: SizeOf, isBuilt: IsBuilt): Part[] {
+/**
+ * The merge policy for a live view: grow a line at a time with no merges at
+ * all until the view passes VIEW, then drop to LOW in one batch.
+ *
+ * Between batches the view only ever grows at its end, so each call is a
+ * prefix extension of the last and reads from the prompt cache. Merging a
+ * little at every message instead would rewrite the tail on every call.
+ * Nothing merges while growing, even when a parent has just become
+ * buildable: a merge rewrites the view from that point onward.
+ */
+export function sawtooth(view: Part[], T: number, sizes: SizeOf, isBuilt: IsBuilt): Part[] {
   const parts = view.slice();
-  while (sumBytes(parts, sizes) > VIEW) {
+  return sumBytes(parts, sizes) > VIEW ? fit(parts, T, sizes, isBuilt, LOW) : parts;
+}
+
+/**
+ * Fit an existing view by merging only, down to `budget` bytes; never append,
+ * replay or split parts. Merges replace two adjacent same-level parts by
+ * their parent, most due first, while the parent is built.
+ */
+export function fit(
+  view: Part[],
+  T: number,
+  sizes: SizeOf,
+  isBuilt: IsBuilt,
+  budget: number = VIEW,
+): Part[] {
+  const parts = view.slice();
+  while (sumBytes(parts, sizes) > budget) {
     const k = bestPair(parts, T, isBuilt);
     if (k < 0) break;
     const a = parts[k];

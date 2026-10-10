@@ -4,10 +4,13 @@
 import { CAP, NODE, byteLen } from "../constants";
 import { cutAtBytes } from "./size";
 
-// System prompt for every compactor call: one message compressed, or two
-// neighboring lines merged, into one line of at most NODE bytes.
-export const COMPACT_SYSTEM: string = `You are the compressor that writes OptChat's memory. OptChat serves a
-single user in one chat that has no end, using tools and subagents. Every
+// Compaction guidance. This is a section of the shared system prompt rather
+// than a prompt of its own: turns and compactions must send byte-identical
+// tools and system text, so compactions read that prefix from the cache entry
+// the turns already wrote.
+export const COMPACT_SYSTEM: string = `When a task begins with "Compaction:", you are writing OptChat's memory
+rather than answering the user. Each call does one step: either compress a
+single message into a line, or fold two neighboring lines into one. Every
 message carries a kind: user (what the user wrote; a message starting
 "[id] " is a subagent's report), talk (OptChat's replies), tool (its tool
 calls), echo (what those tools returned), note (memories imported from an
@@ -15,9 +18,7 @@ older system).
 
 Messages become a binary tree of one-line summaries: each message turns
 into a line by itself, then neighboring lines combine two at a time into
-one line, and those combine again, level by level. Each call does one
-step: either compress a single message into a line, or fold two
-neighboring lines into one.
+one line, and those combine again, level by level.
 
 OptChat reads the chat only through these lines: the newest messages get
 a line apiece, older stretches share one line, and the older the stretch
@@ -29,7 +30,9 @@ OptChat and for every line built above it.
 
 <chat> is OptChat's view through the final message of your stretch. Read
 it to follow the situation, to make sense of references like "that file"
-or "do it", and to restore detail your input dropped.
+or "do it", and to restore detail your input dropped. The task's <input>
+is what you compress; <chat> is context only, never a source of items that
+<input> does not contain.
 
 The goal: OptChat should be able to work later as if the whole stretch
 were still in front of it. Room is limited, so it is spent by value:
@@ -108,6 +111,15 @@ it, each covering n/2 messages; zoom(id, 1) returns message id in full.
 Whenever a line only hints at something you need - what your last reply
 said, a decision, an earlier attempt, where a file lives - zoom it before
 you act, guess or ask. date(id) returns the date and time of message id.`;
+
+/**
+ * The one system prompt, sent byte-identically on turns and compactions.
+ * Sharing it is what lets a compaction read the tools and prompt from the
+ * cache entry the turns already wrote; a separate compressor prompt would
+ * pay to write that prefix again on every node.
+ */
+export const SHARED_SYSTEM: string =
+  MASTER_SYSTEM + "\n\n" + VIEW_DOC + "\n\n" + COMPACT_SYSTEM;
 
 // A realistic dense summary line of exactly NODE bytes, used by the step
 // builders so the model can feel the size. Constructed deterministically;

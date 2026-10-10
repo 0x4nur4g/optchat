@@ -1,5 +1,5 @@
 import type { Kind } from "../constants";
-import { MASTER_SYSTEM, VIEW_DOC, capToolResult } from "../compactor/prompts";
+import { SHARED_SYSTEM, capToolResult } from "../compactor/prompts";
 import type { TurnAdapter, TurnEntry } from "../model/adapter";
 
 /**
@@ -8,10 +8,10 @@ import type { TurnAdapter, TurnEntry } from "../model/adapter";
  * render after logging the current prompt; the prompt must not appear twice.
  */
 
-// System prompt for every turn: master prompt plus the view/tool doc. A
-// constant, so the prompt and tool list stay byte-identical across calls
-// (AGENTS.md rule 7).
-export const TURN_SYSTEM = MASTER_SYSTEM + "\n\n" + VIEW_DOC;
+// System prompt for every turn: the shared prompt. A constant, so the prompt
+// and tool list stay byte-identical across turns and compactions (AGENTS.md
+// rule 7), which is what lets compactions read that prefix from cache.
+export const TURN_SYSTEM = SHARED_SYSTEM;
 
 export interface TurnContext {
   renderView(): string;
