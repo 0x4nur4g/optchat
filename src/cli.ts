@@ -49,6 +49,22 @@ function arg(name: string, fallback: string): string {
   return value !== undefined && !value.startsWith("--") ? value : fallback;
 }
 
+async function packageVersion(): Promise<string> {
+  try {
+    const raw = await readFile(path.join(import.meta.dir, "..", "package.json"), "utf8");
+    const version = (JSON.parse(raw) as { version?: unknown }).version;
+    return typeof version === "string" && version.length > 0 ? version : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+if (process.argv.includes("--version")) {
+  // Runs before any data directory or lock, like --help.
+  console.log(`optchat ${await packageVersion()}`);
+  process.exit(0);
+}
+
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
   console.log(`Usage: optchat [options]
 
@@ -67,6 +83,7 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
 --instructions F   Read F once at startup (default <dir>/instructions.md, if present).
 --git              Commit chat/tree data after each turn in a separate data repository.
 --help             Show this help without creating data or taking a lock.
+--version          Print the version and exit.
 
 Interactive mode requires OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL,
 or --plan with a prior --login and --model.
