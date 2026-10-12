@@ -59,6 +59,7 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
 --kind KIND        With --capture: user, talk, tool, echo or note (default user).
 --text TEXT        With --capture: the message. Without it, the message is read from stdin.
 --login            Sign in with ChatGPT and store the credential, then exit.
+--fresh            With --login: register again rather than reuse the saved account.
 --models           List model slugs the signed-in plan can run, then exit.
 --plan             Use the signed-in ChatGPT plan instead of an API key.
 --model SLUG       With --plan: which model to run.
@@ -120,9 +121,14 @@ if (process.argv.includes("--capture")) {
 // and never takes the memory lock, since it writes only to the auth directory.
 if (process.argv.includes("--login")) {
   try {
+    const fresh = process.argv.includes("--fresh");
+    console.log(fresh
+      ? "optchat: starting a new registration; a saved account is left untouched"
+      : "optchat: reusing the saved registration if one exists (use --fresh to add or change account)");
     await login({
       authDir,
       agentName: "optchat",
+      fresh,
       onAuthorizeUrl: (url) => {
         // The authorization URL carries no secret: the PKCE verifier stays
         // local and only the public challenge travels.

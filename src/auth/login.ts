@@ -44,6 +44,13 @@ export interface LoginOptions {
   authDir: string;
   /** Shown to the user during registration. Display metadata, not identity. */
   agentName?: string;
+  /**
+   * Ignore any saved registration and register from scratch. A saved issued
+   * client id is bound to the account and workspace that first approved it, so
+   * reusing it from a different account is refused by OpenAI. This is the way
+   * out of that, and the way to add a second account.
+   */
+  fresh?: boolean;
   fetch?: typeof fetch;
   openBrowser?: (url: string) => void | Promise<void>;
   /** Called with the authorization URL so a headless host can sign in manually. */
@@ -181,8 +188,10 @@ export async function login(options: LoginOptions): Promise<CredentialRecord> {
   const hostId = await loadOrCreateHostId(options.authDir);
 
   // A returning account reuses its issued client id, which also skips the
-  // account selector and any workspace prompt.
-  const existing = await findReturning(options.authDir);
+  // account selector and any workspace prompt. `fresh` opts out: that id is
+  // bound to the account and workspace that first approved it, so reusing it
+  // elsewhere is refused.
+  const existing = options.fresh === true ? null : await findReturning(options.authDir);
   const isFirstRegistration = existing === null;
   const clientId = existing?.client_id ?? DYNAMIC_CLIENT_ID;
 
