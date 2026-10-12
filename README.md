@@ -38,8 +38,9 @@ deferred. Import and HTML helpers in `src/` are not installed CLI commands.
 
 ## Install and run
 
-Linux is the currently supported runtime. Use Bun 1.4.0, the version pinned for CI.
-The writer lock requires Linux abstract Unix sockets.
+Linux is the verified runtime. macOS is expected to work but has not been verified
+end to end yet. Windows is not supported: the writer lock needs a Unix domain
+socket. Use Bun 1.4.0, the version pinned for CI.
 
 Install straight from the repository, no clone needed:
 
@@ -132,8 +133,8 @@ storage.
 ## Memory and storage
 
 Under `--dir`, the log uses `chat/global/main/YYYY-MM-DD.jsonl`; the tree uses
-`tree/global/YYYY-MM-DD.jsonl`. Each append is written and fsynced. A Linux abstract
-Unix-socket guard serializes lock acquisition; the filesystem socket `lock.sock`
+`tree/global/YYYY-MM-DD.jsonl`. Each append is written and fsynced. An advisory
+`flock` serializes lock acquisition; the filesystem socket `lock.sock`
 remains held for the writer's lifetime. Loading skips torn JSON lines and repairs a
 missing final newline. Keep backups of both streams; rebuilding the tree costs model calls.
 

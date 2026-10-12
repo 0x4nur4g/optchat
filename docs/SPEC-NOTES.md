@@ -11,10 +11,13 @@ OpenAI-compatible native Chat Completions provider and exposes `zoom` and `date`
 Storage paths include scope keys; phase 1 exposes only `global` in the CLI.
 The package stays private. Local CLI installation is separate from publication.
 
-Linux with Bun 1.4.0 is the currently supported runtime. The writer lock depends
-on Linux abstract Unix sockets; this release does not provide macOS/Windows lock
-portability. An always-on Linux host with a persistent terminal session supports
-continued operation while users disconnect and attach again.
+Linux is the verified runtime, with Bun 1.4.0. macOS is expected to work but has
+not been verified end to end. The writer lock is portable: an advisory `flock`
+serialises stale-socket takeover, and its kernel lifetime needs no PID file and
+no timeout. A Unix domain socket stays bound for the writer's lifetime as the
+visible marker. Windows is not supported, because that socket is a Unix domain
+socket. An always-on host with a persistent terminal session supports continued
+operation while users disconnect and attach again.
 
 Product subagents, computer use, external session bridges, a semantic index,
 and history-import/browser commands are deferred. Source helpers for importing
@@ -87,7 +90,7 @@ address, delimiter, or wrapper in the final request; allow provider context head
 Use append-only `chat/<scope>/main/YYYY-MM-DD.jsonl` and
 `tree/<scope>/YYYY-MM-DD.jsonl` under the data directory. Each append writes and
 fsyncs before returning. Loading skips torn JSON lines and repairs missing final
-newlines. A Linux abstract Unix-socket guard serializes acquisition and stale-socket
+newlines. An advisory `flock` serializes acquisition and stale-socket
 takeover. Hold the filesystem socket `<dir>/lock.sock` for the writer's lifetime.
 Git persistence is disabled by default. `--git` opts into local per-turn commits
 in a separate data repository; it does not publish to a remote repository.
