@@ -108,6 +108,12 @@ export async function loadCredentials(dir: string): Promise<CredentialRecord[]> 
   return records;
 }
 
+/** Forget one account locally. The registered client survives on OpenAI's side. */
+export async function removeCredential(dir: string, clientId: string): Promise<void> {
+  const { rm } = await import("node:fs/promises");
+  await rm(credentialFile(dir, clientId), { force: true });
+}
+
 /** The model chosen for plan runs, remembered so a later plain run just works. */
 export async function savePlanModel(dir: string, model: string): Promise<void> {
   await mkdir(dir, { recursive: true, mode: 0o700 });
