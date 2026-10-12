@@ -1,6 +1,6 @@
 {
   "name": "optchat",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "OptChat: endless chat where the chat history is the memory (compressed binary tree). Standalone core first.",
   "type": "module",
   "private": true,
