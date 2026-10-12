@@ -1,0 +1,15 @@
+{
+  "name": "optchat-opencode",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Keep optchat's memory behind OpenCode sessions: capture what you type, expose recall through MCP.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "0.0.0-beta-18155",
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.8.0"
+  }
+}
