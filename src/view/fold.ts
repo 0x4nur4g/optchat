@@ -79,10 +79,16 @@ export function foldAll(T: number, sizes: SizeOf, isBuilt: IsBuilt): Part[] {
 /**
  * Index of the adjacent pair to merge, or -1 when nothing can merge.
  * Pair (a, b) is mergeable when a.l == b.l, a.i is even, b.i == a.i + 1, and
- * parent (a.l+1, a.i/2) is built. Largest due wins:
- *   due = (T - a.id) / 2^(a.l + 2)
- * due * 4 == (T - a.id) / 2^a.l, and the constant factor 4 never changes the
- * argmax, so ranking by due is the same as ranking by (T - a.id) / 2^a.l.
+ * parent (a.l+1, a.i/2) is built. Largest due wins; ties go to the oldest.
+ *
+ * Due is how long ago the pair ENDED, measured in its own line size:
+ *
+ *   due = (T - last) / 2^l    last: the pair's final message
+ *
+ * Measuring from the pair's FIRST message instead looks plausible and is
+ * wrong: near ties it merges old pairs and rewrites lines the reference
+ * order keeps, so distant detail churns instead of recent. It matched the
+ * reference order at only 481 of 20,001 steps.
  */
 function bestPair(parts: Part[], T: number, isBuilt: IsBuilt): number {
   let best = -1;
@@ -92,7 +98,8 @@ function bestPair(parts: Part[], T: number, isBuilt: IsBuilt): number {
     const b = parts[k + 1];
     if (a.l !== b.l || a.i % 2 !== 0 || b.i !== a.i + 1) continue;
     if (!isBuilt(a.l + 1, a.i / 2)) continue;
-    const due = (T - a.id) / 2 ** (a.l + 2);
+    const last = a.id + 2 * a.n - 1;
+    const due = (T - last) / 2 ** a.l;
     if (due > bestDue) {
       bestDue = due;
       best = k;
