@@ -160,7 +160,11 @@ function listenForCallback(): Promise<{
 }
 
 function openBrowser(url: string): void {
-  const child = spawn("xdg-open", [url], { stdio: "ignore", detached: true });
+  // macOS ships `open`, Linux distributions ship `xdg-open`. The URL is
+  // printed before this is called, so a host with neither still completes
+  // sign-in by pasting it manually.
+  const command = process.platform === "darwin" ? "open" : "xdg-open";
+  const child = spawn(command, [url], { stdio: "ignore", detached: true });
   child.once("error", () => { /* no browser available: the URL is printed */ });
   child.unref();
 }
