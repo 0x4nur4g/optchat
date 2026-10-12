@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
-import { lstat, mkdir, realpath, rm } from "node:fs/promises";
+import { lstat, mkdir, rm } from "node:fs/promises";
 import { connect, createServer, type Server } from "node:net";
 import * as path from "node:path";
+import { lockFile } from "./flock";
 
 export interface LockHandle {
   release(): Promise<void>;
@@ -61,22 +61,19 @@ function closeServer(server: Server): Promise<void> {
 
 /**
  * Single-writer lock over a Unix socket at <dir>/lock.sock.
- * A Linux abstract Unix socket serializes stale-file takeover across processes.
- * Its kernel lifetime needs no cleanup after a crash, PID file, or timeout.
- * The filesystem socket remains held for the writer's lifetime.
+ *
+ * An advisory flock serializes stale-file takeover across processes. Its
+ * kernel lifetime needs no cleanup after a crash, no PID file and no timeout:
+ * the lock goes with the owning process. That matters because replacing a
+ * dead owner's socket means deleting a file first, and a second process that
+ * deletes at the wrong moment can remove a live owner's socket instead. The
+ * flock makes that sequence single-file, so it cannot happen. The filesystem
+ * socket stays bound for the writer's lifetime as the visible marker.
  */
 export async function acquireLock(dir: string): Promise<LockHandle> {
   await mkdir(dir, { recursive: true, mode: 0o700 });
   const sock = path.join(dir, "lock.sock");
-  const identity = createHash("sha256").update(await realpath(dir)).digest("hex");
-  const guard = createServer((client) => client.destroy());
-  try {
-    await listenOn(guard, `\0optchat-lock-${identity}`);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EADDRINUSE") throw secondWriter(sock);
-    throw err;
-  }
-  guard.unref();
+  const guard = lockFile(path.join(dir, "lock.guard"), secondWriter(sock));
   let server = createServer((client) => client.destroy());
   try {
     try {
@@ -103,13 +100,13 @@ export async function acquireLock(dir: string): Promise<LockHandle> {
     }
   } catch (err) {
     await closeServer(server);
-    await closeServer(guard);
+    guard.release();
     throw err;
   }
   server.unref();
   let release: Promise<void> | undefined;
   return {
     // Closing the server unlinks its own socket. A later rm could remove a successor.
-    release: () => (release ??= closeServer(server).then(() => closeServer(guard))),
+    release: () => (release ??= closeServer(server).then(() => guard.release())),
   };
 }
