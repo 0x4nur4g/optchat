@@ -11,7 +11,8 @@ export type GetText = (part: Part) => string | undefined | null;
 
 const OPEN = "<chat>";
 const CLOSE = "</chat>";
-const NOT_BUILT = "(not summarized yet: zoom it)";
+/** Body of a row whose summary is not built yet. Size it as it renders. */
+export const NOT_BUILT = "(not summarized yet: zoom it)";
 
 export function renderView(parts: Part[], getText: GetText): string {
   if (parts.length === 0) return `${OPEN}\n${CLOSE}`;

@@ -3,6 +3,8 @@
  * written. Storage keeps ISO timestamps; the model sees local time plus date.
  */
 
+import type { LogMessage } from "../constants";
+
 /** Local date+time for an ISO timestamp, e.g. "2026-10-06 14:21:07". */
 export function dateOf(iso: string): string {
   const d = new Date(iso);
@@ -19,4 +21,12 @@ export function lookup(getDate: (id: number) => string | null, id: number): stri
   if (!Number.isSafeInteger(id) || id < 0) return `No line ${id}.`;
   const iso = getDate(id);
   return iso === null ? `No line ${id}.` : dateOf(iso);
+}
+
+/** Timestamps by ID, guarded so a gap cannot answer with a neighbour's date. */
+export function memoryDateAt(messages: LogMessage[]): (id: number) => string | null {
+  return (id) => {
+    const m = messages[id];
+    return m !== undefined && m.i === id ? m.date : null;
+  };
 }

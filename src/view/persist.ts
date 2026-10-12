@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import * as path from "node:path";
-import type { Part } from "./fold";
+import { appendAndFit, foldAll } from "./fold";
+import type { IsBuilt, Part, SizeOf } from "./fold";
 
 /**
  * The live view is persisted and reloaded, never rebuilt from the log. A
@@ -63,4 +64,42 @@ export async function loadView(dir: string, scope: string): Promise<Part[] | nul
   }
   if (!Array.isArray(parsed) || !parsed.every(isPart)) return null;
   return parsed as Part[];
+}
+
+/** Messages a saved view covers, or -1 when it does not tile from 0. */
+function coveredBy(view: Part[]): number {
+  let at = 0;
+  for (const part of view) {
+    if (part.id !== at) return -1;
+    at += part.n;
+  }
+  return at;
+}
+
+/**
+ * Resume the saved view rather than rebuilding it. A rebuilt tiling differs
+ * from the live one, and that difference alone invalidates every cached
+ * prefix already paid for. Only a view that cannot be trusted is rebuilt.
+ *
+ * A crash between a message append and the view save leaves the view short:
+ * the missing leaves are appended rather than throwing the tiling away. This
+ * stays in memory, so a read-only caller never writes the view file.
+ */
+export async function resumeView(
+  dir: string,
+  scope: string,
+  T: number,
+  sizes: SizeOf,
+  isBuilt: IsBuilt,
+): Promise<Part[]> {
+  const saved = await loadView(dir, scope);
+  const covered = saved === null ? -1 : coveredBy(saved);
+  if (covered >= 0 && covered <= T) {
+    let resumed = saved!;
+    for (let t = covered; t < T; t++) {
+      resumed = appendAndFit(resumed, t + 1, sizes, isBuilt);
+    }
+    return resumed;
+  }
+  return foldAll(T, sizes, isBuilt);
 }

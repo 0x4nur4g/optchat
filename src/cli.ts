@@ -4,18 +4,19 @@
  *
  * Usage: optchat --scope global --dir ./data [--print-view]
  *   --print-view  print the current view and exit (no input loop)
+ *   --mcp         serve read-only memory tools over stdio (no input loop)
  *
  * On start the view is printed once. Then each stdin line is queued and a
  * turn is run. Lines arriving during a turn reach the native actor between
  * completed tool calls, or start a fresh turn after it finishes.
  *
  * Model: OPENAI_BASE_URL + OPENAI_API_KEY + OPENAI_MODEL (chat completions,
- * plain fetch). Interactive mode requires all three settings. --print-view
- * needs no model configuration.
+ * plain fetch). Interactive mode requires all three settings. --print-view,
+ * --capture and --mcp need no model configuration.
  */
 import * as readline from "node:readline";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, writeSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import * as path from "node:path";
 import { homedir } from "node:os";
@@ -31,17 +32,19 @@ import { acquireLock } from "./storage/lock";
 import type { LockHandle } from "./storage/lock";
 import { loadAllNodes, saveNode } from "./storage/tree-store";
 import { nodeKey } from "./tree/address";
-import { appendAndFit, foldAll, sawtooth } from "./view/fold";
+import { appendAndFit, sawtooth } from "./view/fold";
 import type { Part } from "./view/fold";
-import { loadView, saveView } from "./view/persist";
-import { renderView } from "./view/render";
+import { resumeView, saveView } from "./view/persist";
+import { NOT_BUILT, renderBefore, renderView } from "./view/render";
 import { pumpOnce } from "./compactor/pump";
 import { runTurn, settle, TURN_SYSTEM } from "./turn/loop";
 import type { TurnContext } from "./turn/loop";
-import { zoom } from "./tools/zoom";
+import { memoryZoomStore, zoom } from "./tools/zoom";
 import type { ZoomStore } from "./tools/zoom";
-import { lookup } from "./tools/date";
+import { lookup, memoryDateAt } from "./tools/date";
 import { TOOL_DEFINITIONS } from "./tools/definitions";
+import { memoryTools } from "./mcp/tools";
+import { serveMcp } from "./mcp/server";
 
 function arg(name: string, fallback: string): string {
   const i = process.argv.indexOf(name);
@@ -71,6 +74,8 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
 --scope KEY        Memory scope. Only global is supported today.
 --dir PATH         Data directory (default ./data).
 --print-view       Print stored memory and exit without a model.
+--mcp              Serve read-only memory tools (recall, zoom, date) over stdio for MCP
+                   clients. No model and no writer lock; exits when stdin ends.
 --capture          Append one message and exit. No model needed.
 --kind KIND        With --capture: user, talk, tool, echo or note (default user).
 --text TEXT        With --capture: the message. Without it, the message is read from stdin.
@@ -106,8 +111,6 @@ function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-const PLACEHOLDER = "(not summarized yet: zoom it)"; // render.ts placeholder body
-
 if (!(SCOPES as readonly string[]).includes(scope)) {
   console.error("optchat: only scope global is supported");
   process.exit(1);
@@ -134,6 +137,27 @@ if (process.argv.includes("--capture")) {
     console.error(`optchat: ${errText(err)}`);
     process.exit(1);
   }
+}
+
+// --mcp: read-only recall for MCP clients (OpenCode, Codex, Claude Code). Runs
+// before any model configuration is read, and never takes the writer lock: a
+// reader must not block a running instance. Nothing here writes to the log, so
+// --capture stays the only way memory is written.
+if (process.argv.includes("--mcp")) {
+  const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+  try {
+    // Synchronous writes: process.exit would otherwise drop a large reply that
+    // is still buffered in the stdout pipe.
+    await serveMcp(lines, (line) => { writeSync(1, `${line}\n`); }, {
+      name: "optchat",
+      version: await packageVersion(),
+      tools: memoryTools(dir, scope),
+    });
+  } catch (err) {
+    console.error(`optchat: ${errText(err)}`);
+    process.exit(1);
+  }
+  process.exit(0);
 }
 
 // --login: Sign in with ChatGPT. Runs before any model configuration is read
@@ -323,44 +347,14 @@ const isBuilt = (l: number, i: number): boolean => nodes.has(nodeKey(l, i));
 /** Render size of a part: stored summary bytes, or the placeholder row. */
 function sizeOf(l: number, i: number): number {
   const node = nodes.get(nodeKey(l, i));
-  return node === undefined ? byteLen(PLACEHOLDER) : node.size;
+  return node === undefined ? byteLen(NOT_BUILT) : node.size;
 }
 
 function getText(part: Part): string | undefined {
   return nodes.get(nodeKey(part.l, part.i))?.text;
 }
 
-/** Messages a saved view covers, or -1 when it does not tile from 0. */
-function coveredBy(view: Part[]): number {
-  let at = 0;
-  for (const part of view) {
-    if (part.id !== at) return -1;
-    at += part.n;
-  }
-  return at;
-}
-
-/**
- * Resume the saved view rather than rebuilding it. A rebuilt tiling differs
- * from the live one, and that difference alone invalidates every cached
- * prefix already paid for. Only a view that cannot be trusted is rebuilt.
- */
-async function resumeView(): Promise<Part[]> {
-  const saved = await loadView(dir, scope);
-  const covered = saved === null ? -1 : coveredBy(saved);
-  if (covered >= 0 && covered <= messages.length) {
-    let resumed = saved!;
-    // A crash between a message append and this save leaves the view short;
-    // append the missing leaves rather than throwing the tiling away.
-    for (let t = covered; t < messages.length; t++) {
-      resumed = appendAndFit(resumed, t + 1, sizeOf, isBuilt);
-    }
-    return resumed;
-  }
-  return foldAll(messages.length, sizeOf, isBuilt);
-}
-
-let view: Part[] = await resumeView();
+let view: Part[] = await resumeView(dir, scope, messages.length, sizeOf, isBuilt);
 
 function allBuilt(): boolean {
   return view.every((p) => isBuilt(p.l, p.i));
@@ -385,26 +379,9 @@ function refit(): void {
 }
 
 // --- tools: zoom and date over the live log + tree --------------------------
-const zoomStore: ZoomStore = {
-  getMessage(id: number): string | null {
-    const m = messages[id];
-    return m !== undefined && m.i === id ? `${m.kind}: ${m.text}` : null;
-  },
-  getNodeChildren(id: number, n: number): [string, string] | null {
-    const l = Math.log2(n);
-    const i = id / n;
-    if (!Number.isInteger(l) || !Number.isInteger(i)) return null;
-    const a = nodes.get(nodeKey(l - 1, 2 * i));
-    const b = nodes.get(nodeKey(l - 1, 2 * i + 1));
-    if (a === undefined || b === undefined) return null;
-    return [a.text, b.text];
-  },
-};
+const zoomStore: ZoomStore = memoryZoomStore(messages, nodes);
 
-function dateAt(id: number): string | null {
-  const m = messages[id];
-  return m !== undefined && m.i === id ? m.date : null;
-}
+const dateAt = memoryDateAt(messages);
 
 function runTool(name: string, input: Record<string, unknown>): string {
   if (name === "zoom") {
@@ -437,11 +414,7 @@ const model = usePlan
   : env === null
     ? null
     : new OpenAICompat(env, { tools: TOOL_DEFINITIONS, runTool, takePending });
-if (!printView && env !== null) {
-  const url = new URL(env.baseUrl);
-  const redacted = url.username !== "" || url.password !== "" || url.search !== "";
-  console.log(`optchat: model ${env.model} at ${redactUrl(env.baseUrl)}${redacted ? " (credentials present, redacted)" : ""}`);
-}
+// The startup header reports the active model, so no separate banner.
 
 // --- compactor pump: background loop; JOBS cap lives in pumpOnce ------------
 const busy = new Set<string>();
@@ -633,6 +606,7 @@ async function preserveInputs(pending: string[]): Promise<void> {
 }
 
 let closeInput = (): void => {};
+let reprompt = (): void => {};
 
 function kickTurn(): void {
   if (turnLoop !== null || abort.signal.aborted || queue.length === 0) return;
@@ -644,20 +618,53 @@ function kickTurn(): void {
   }).finally(() => {
     turnLoop = null;
     if (queue.length > 0 && !abort.signal.aborted) kickTurn();
+    else reprompt();
   });
 }
 
 // --- start ------------------------------------------------------------------
-console.log(`optchat scope=${scope} dir=${dir}`);
-console.log(renderView(view, getText));
+// For a person, an unsummarized message shows as itself. The placeholder a
+// model sees ("not summarized yet: zoom it") is an instruction to zoom, which
+// means nothing to the reader of their own memory.
+function humanText(part: Part): string | undefined {
+  const node = nodes.get(nodeKey(part.l, part.i))?.text;
+  if (node !== undefined) return node;
+  if (part.n !== 1) return undefined;
+  const message = messages[part.id];
+  if (message === undefined) return undefined;
+  const body = message.text.replace(/\r\n?|\n/g, " ").trim();
+  return `${message.kind}: ${body.length > 160 ? `${body.slice(0, 160)}…` : body}`;
+}
+
+if (printView) {
+  // Pipeable form: the view exactly as a model call receives it.
+  console.log(`optchat scope=${scope} dir=${dir}`);
+  console.log(renderView(view, getText));
+} else {
+  // The interactive screen is for a person, so it shows the memory without the
+  // <chat> framing a model needs, and says what to do when there is none yet.
+  const memory = renderBefore(view, Number.POSITIVE_INFINITY, humanText);
+  console.log(`optchat ${await packageVersion()}    memory ${dir}    model ${usePlan ? modelChoice : (env?.model ?? "")}`);
+  console.log("");
+  console.log(memory === "" ? "Memory is empty. Whatever you say here is kept forever." : memory);
+  console.log("");
+  console.log("  /cancel  cancel the current turn");
+  console.log("  /exit    quit");
+  console.log("");
+}
 
 if (printView) {
   // No model calls or background writes in print-only mode.
 } else {
   const pumping = pumpLoop();
 
-  const rl = readline.createInterface({ input: process.stdin });
+  // terminal:false keeps the terminal driver in charge of echoing and line
+  // editing, which is the plain terminal this CLI wants, and it makes the
+  // prompt ours to write rather than readline's.
+  const rl = readline.createInterface({ input: process.stdin, terminal: false });
   closeInput = () => rl.close();
+  reprompt = () => process.stdout.write("> ");
+  reprompt();
   const onInterrupt = (): void => {
     abort.abort();
     activeTurn?.abort();
@@ -666,13 +673,17 @@ if (printView) {
   process.on("SIGINT", onInterrupt);
   rl.on("line", (line: string) => {
     const command = line.trim();
-    if (command === "") return;
+    if (command === "") {
+      reprompt();
+      return;
+    }
     if (command === "/exit" || command === "/quit") {
       rl.close();
       return;
     }
     if (command === "/cancel") {
       activeTurn?.abort();
+      if (turnLoop === null) reprompt();
       return;
     }
     queue.push(line);
