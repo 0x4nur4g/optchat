@@ -23,7 +23,7 @@ import { SCOPES, byteLen } from "./constants";
 import type { Kind, TreeNode } from "./constants";
 import { OpenAICompat, readEnv, redactUrl } from "./model/openai-compat";
 import { OpenAIResponses, listModels } from "./model/openai-responses";
-import { login, refreshIfDue } from "./auth/login";
+import { login, refreshIfDue, signOut, PLAN_SCOPE } from "./auth/login";
 import { loadCredentials, loadPlanModel, savePlanModel } from "./auth/credentials";
 import { openLog } from "./storage/log";
 import { capture } from "./storage/capture";
@@ -76,6 +76,8 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
 --text TEXT        With --capture: the message. Without it, the message is read from stdin.
 --login            Sign in with ChatGPT and store the credential, then exit.
 --fresh            With --login: register again rather than reuse the saved account.
+--accounts         Show which ChatGPT account each saved registration is bound to.
+--logout           Revoke the saved session and forget it, then exit.
 --models           List model slugs the signed-in plan can run, then exit.
 --plan             Use the signed-in ChatGPT plan instead of an API key.
 --model SLUG       With --plan: which model to run.
@@ -182,6 +184,56 @@ if (process.argv.includes("--models")) {
     console.error(`optchat: ${errText(err)}`);
     process.exit(1);
   }
+}
+
+// --accounts: which ChatGPT account each saved registration is bound to. The
+// email is masked; it is shown so a workspace mismatch can be recognised, and
+// is never written to a log.
+function maskEmail(email: string): string {
+  const at = email.indexOf("@");
+  if (at <= 0) return "(no email)";
+  const local = email.slice(0, at);
+  return `${local.slice(0, 1)}***@${email.slice(at + 1)}`;
+}
+
+if (process.argv.includes("--accounts")) {
+  try {
+    const records = await loadCredentials(authDir);
+    if (records.length === 0) {
+      console.log("optchat: no saved ChatGPT account; run optchat --login");
+    } else {
+      for (const record of records) {
+        const plan = record.scopes.includes(PLAN_SCOPE) ? "plan" : "no-plan";
+        console.log(`${maskEmail(record.email)}  ${record.client_id}  ${plan}  saved ${record.saved_at}`);
+      }
+    }
+    process.exit(0);
+  } catch (err) {
+    console.error(`optchat: ${errText(err)}`);
+    process.exit(1);
+  }
+}
+
+// --logout: revoke the session at OpenAI and forget it here. The registered
+// client survives on OpenAI's side, so the next --login registers again.
+if (process.argv.includes("--logout")) {
+  try {
+    const records = await loadCredentials(authDir);
+    if (records.length === 0) {
+      console.log("optchat: no saved ChatGPT account");
+    } else {
+      for (const record of records) {
+        const { revoked } = await signOut(record, { authDir });
+        console.log(revoked
+          ? `optchat: signed out ${maskEmail(record.email)}; session revoked`
+          : `optchat: signed out ${maskEmail(record.email)}; remote revocation was not confirmed`);
+      }
+    }
+  } catch (err) {
+    console.error(`optchat: ${errText(err)}`);
+    process.exit(1);
+  }
+  process.exit(0);
 }
 
 let env: ReturnType<typeof readEnv> = null;

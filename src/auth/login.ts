@@ -8,6 +8,7 @@ import {
   applyRefresh,
   loadCredential,
   needsRefresh,
+  removeCredential,
   saveCredential,
   type CredentialRecord,
 } from "./credentials";
@@ -339,6 +340,48 @@ async function finishLogin(
   };
   await saveCredential(authDir, record);
   return record;
+}
+
+/**
+ * Sign out one account: revoke the renewable session at OpenAI, then forget it
+ * locally. Revocation is best effort. The docs are explicit that a local sign
+ * out without confirmed revocation must still clear the tokens and say so, and
+ * that revoking does not delete the registered client.
+ */
+export async function signOut(
+  record: CredentialRecord,
+  options: { authDir: string; fetch?: typeof fetch },
+): Promise<{ revoked: boolean }> {
+  const fetchFn = options.fetch ?? fetch;
+  let revoked = false;
+  if (record.refresh_token.length > 0) {
+    // One retry: a network failure must not leave a token usable remotely
+    // while the user believes they signed out.
+    for (let attempt = 0; attempt < 2 && !revoked; attempt++) {
+      try {
+        const discovery = await readBody(await fetchFn(DISCOVERY_URL)) as { revocation_endpoint?: unknown };
+        const endpoint = typeof discovery["revocation_endpoint"] === "string"
+          ? discovery["revocation_endpoint"]
+          : null;
+        if (endpoint === null) break;
+        const res = await fetchFn(endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: toForm({
+            token: record.refresh_token,
+            token_type_hint: "refresh_token",
+            client_id: record.client_id,
+          }),
+        });
+        // An empty 200 is success, including for an already invalid token.
+        revoked = res.ok;
+      } catch {
+        revoked = false;
+      }
+    }
+  }
+  await removeCredential(options.authDir, record.client_id);
+  return { revoked };
 }
 
 /**
