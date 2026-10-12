@@ -63,6 +63,32 @@ Both put `optchat` into `~/.bun/bin`. That directory must be on `PATH` for the
 last command to resolve. The official Bun installer adds it. If Bun was
 installed another way, add `~/.bun/bin` to `PATH` first.
 
+### Which version, and how to update
+
+```sh
+optchat --version     # what is installed
+bun pm ls -g          # the commit it resolved to
+```
+
+To install a known build instead of the branch tip, pin a release tag:
+
+```sh
+bun install -g github:0x4nur4g/optchat#v0.2.0
+```
+
+Updating is a remove and a reinstall. **`bun update -g` does not move a git
+specification** — once a commit is resolved it stays there, so updating that
+way leaves you where you were.
+
+```sh
+bun remove -g optchat
+bun install -g github:0x4nur4g/optchat#v0.2.0
+```
+
+Installing without a tag resolves the current default branch. That is right for
+following along. It is also why a plain reinstall can appear to change nothing:
+bun honours the resolution it already recorded.
+
 For continuous use, run on an always-on Linux host in a persistent terminal session.
 Attach to that session as needed.
 
