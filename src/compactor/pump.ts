@@ -29,8 +29,8 @@ export function firstUnbuilt(view: Part[], isBuilt: IsBuilt): number {
 // Buildable nodes, in the reference order (leaves oldest first, then each
 // merge level):
 //   not built, not busy, sources ready (level 0: the message exists;
-//   level > 0: both children built), and end <= first so that every view
-//   line before the node's end is already a built summary.
+//   level > 0: both children built). Only leaves are restricted to the
+//   first unbuilt view line; merges may build across earlier view holes.
 // `end` is i for level 0 (its message) and (i+1)*2^l for a merge (exclusive).
 // The caller passes first = firstUnbuilt(...); the default T means "no
 // frontier" and returns every buildable node.
@@ -42,7 +42,7 @@ export function candidates(T: number, isBuilt: IsBuilt, busy: Set<string>, first
       if (isBuilt(l, i) || busy.has(nodeKey(l, i))) continue;
       if (l > 0 && !(isBuilt(l - 1, 2 * i) && isBuilt(l - 1, 2 * i + 1))) continue;
       const end = l === 0 ? i : (i + 1) * span;
-      if (end > first) continue;
+      if (l === 0 && end > first) continue;
       out.push({ l, i, end });
     }
   }

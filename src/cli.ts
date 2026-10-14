@@ -445,7 +445,8 @@ function contextOf(snapshot: Part[], l: number, i: number): string[] {
   for (const p of snapshot) {
     if (p.id + p.n > end) break;
     const text = nodes.get(nodeKey(p.l, p.i))?.text;
-    if (text !== undefined) lines.push(text.replace(/\r\n|\r|\n/g, " "));
+    if (text === undefined) break; // cut at the first unbuilt line; never skip a hole
+    lines.push(text.replace(/\r\n|\r|\n/g, " "));
   }
   return lines;
 }
