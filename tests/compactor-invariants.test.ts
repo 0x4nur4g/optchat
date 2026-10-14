@@ -6,7 +6,7 @@ import {
   buildMergeStep,
   capToolResult,
 } from "../src/compactor/prompts";
-import { pumpOnce } from "../src/compactor/pump";
+import { initReady, pumpOnce } from "../src/compactor/pump";
 import { cutAtBytes, shortestUnder } from "../src/compactor/size";
 import { CAP, NODE, byteLen } from "../src/constants";
 
@@ -39,8 +39,7 @@ describe("AGENTS.md rule 5: compactor input adds no node IDs", () => {
     const reported = new Set<string>();
     const saved: string[] = [];
     await pumpOnce({
-      T: 1,
-      view: [{ l: 0, i: 0, id: 0, n: 1 }],
+      ready: initReady([{ l: 0, i: 0, id: 0, n: 1 }], () => false, 1),
       isBuilt: () => false,
       busy,
       reported,
@@ -71,8 +70,7 @@ describe("AGENTS.md rule 5: model compactor output is one line only", () => {
     const reported = new Set<string>();
     const saved: string[] = [];
     await pumpOnce({
-      T: 1,
-      view: [{ l: 0, i: 0, id: 0, n: 1 }],
+      ready: initReady([{ l: 0, i: 0, id: 0, n: 1 }], () => false, 1),
       isBuilt: () => false,
       busy,
       reported,

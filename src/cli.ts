@@ -36,7 +36,7 @@ import { appendAndFit, sawtooth } from "./view/fold";
 import type { Part } from "./view/fold";
 import { resumeView, saveView } from "./view/persist";
 import { NOT_BUILT, renderBefore, renderView } from "./view/render";
-import { pumpOnce } from "./compactor/pump";
+import { arrive, initReady, pumpOnce } from "./compactor/pump";
 import { runTurn, settle, TURN_SYSTEM } from "./turn/loop";
 import type { TurnContext } from "./turn/loop";
 import { memoryZoomStore, zoom } from "./tools/zoom";
@@ -356,6 +356,10 @@ function getText(part: Part): string | undefined {
 
 let view: Part[] = await resumeView(dir, scope, messages.length, sizeOf, isBuilt);
 
+// Ready queues: seeded once from the loaded state, then maintained by message
+// arrivals and completed saves. The pump pops them instead of scanning.
+const ready = initReady(view, isBuilt, messages.length);
+
 function allBuilt(): boolean {
   return view.every((p) => isBuilt(p.l, p.i));
 }
@@ -457,8 +461,7 @@ async function pumpLoop(): Promise<void> {
     const observed = pumpVersion;
     const snapshot = view;
     const started = await pumpOnce({
-      T: messages.length,
-      view: snapshot,
+      ready,
       isBuilt,
       busy,
       reported,
@@ -513,6 +516,7 @@ async function log(kind: Kind, text: string): Promise<void> {
   }
   view = appendAndFit(view, messages.length, sizeOf, isBuilt);
   await saveView(dir, scope, view);
+  arrive(ready, message.i); // a leaf enters the ready queue on arrival
   wakePump();
   console.log(`${kind}: ${text}`);
 }
