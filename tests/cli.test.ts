@@ -303,10 +303,10 @@ describe("CLI startup", () => {
   test("stored ID gaps fail clearly instead of misaddressing the view", async () => {
     const dir = await fixture();
     const writer = await openLog(dir, "global");
-    const prefix = await writer.append("note", "prefix");
-    expect(prefix.i).toBe(0);
-    await appendFile(dayFile(dir, "global", prefix.date), JSON.stringify({
-      i: 2, kind: "user", text: "later", size: Buffer.byteLength("user: later"), date: prefix.date,
+    const [prefix] = await writer.append("note", "prefix");
+    expect(prefix!.i).toBe(0);
+    await appendFile(dayFile(dir, "global", prefix!.date), JSON.stringify({
+      i: 2, kind: "user", text: "later", size: Buffer.byteLength("user: later"), date: prefix!.date,
     }) + "\n");
     const child = start(dir, ["--print-view"]);
     child.stdin.end();
@@ -625,13 +625,13 @@ describe("offline native CLI", () => {
   test("a reserved tail ID rejects startup before appending input or calling a model", async () => {
     const dir = await fixture();
     const writer = await openLog(dir, "global");
-    const prefix = await writer.append("note", "prefix");
-    expect(prefix.i).toBe(0);
+    const [prefix] = await writer.append("note", "prefix");
+    expect(prefix!.i).toBe(0);
     // The loader rejects the invalid date but reserves the parsed ID.
-    await appendFile(dayFile(dir, "global", prefix.date), JSON.stringify({
+    await appendFile(dayFile(dir, "global", prefix!.date), JSON.stringify({
       i: 7, kind: "note", text: "invalid record", size: Buffer.byteLength("note: invalid record"), date: "invalid date",
     }) + "\n");
-    const before = await readFile(dayFile(dir, "global", prefix.date), "utf8");
+    const before = await readFile(dayFile(dir, "global", prefix!.date), "utf8");
     let modelCalls = 0;
     const env = provider(() => {
       modelCalls++;
@@ -647,7 +647,7 @@ describe("offline native CLI", () => {
     const log = await loadAll(dir, "global");
     expect(log.map((message) => message.i)).toEqual([0]);
     expect(log.filter((message) => message.kind === "user")).toEqual([]);
-    expect(await readFile(dayFile(dir, "global", prefix.date), "utf8")).toBe(before);
+    expect(await readFile(dayFile(dir, "global", prefix!.date), "utf8")).toBe(before);
     expect(existsSync(path.join(dir, "lock.sock"))).toBe(false);
   });
 });

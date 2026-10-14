@@ -20,12 +20,12 @@ afterEach(async () => {
 });
 
 describe("capture module", () => {
-  test("appends a durable message and returns it", async () => {
+  test("appends a durable message and returns the added messages", async () => {
     const dir = await fixture();
-    const message = await capture(dir, "global", "user", "hello");
-    expect(message.i).toBe(0);
-    expect(message.kind).toBe("user");
-    expect(message.text).toBe("hello");
+    const [message] = await capture(dir, "global", "user", "hello");
+    expect(message!.i).toBe(0);
+    expect(message!.kind).toBe("user");
+    expect(message!.text).toBe("hello");
     expect((await loadAll(dir, "global")).map((m) => m.text)).toEqual(["hello"]);
   });
 
@@ -141,5 +141,27 @@ describe("capture CLI", () => {
     const out = await run(dir, ["--kind", "user", "--text", "added later"]);
     expect(out.code).toBe(0);
     expect((await loadAll(dir, "global")).map((m) => m.i)).toEqual([0, 1]);
+  });
+
+  test("a long non-echo capture is logged as several messages, one id per line", async () => {
+    const dir = await fixture();
+    const text = "line\n".repeat(6500); // 32500 chars: over the 30000-char cap
+    const out = await run(dir, ["--kind", "user"], text);
+    expect(out.code).toBe(0);
+    expect(out.stdout).toBe("0\n1\n");
+    const stored = await loadAll(dir, "global");
+    expect(stored.map((m) => m.text).join("")).toBe(text);
+    expect(stored.every((m) => m.text.length <= 30_000)).toBe(true);
+  });
+
+  test("a long echo capture stays one whole message", async () => {
+    const dir = await fixture();
+    const text = "line\n".repeat(6500);
+    const out = await run(dir, ["--kind", "echo"], text);
+    expect(out.code).toBe(0);
+    expect(out.stdout).toBe("0\n");
+    const stored = await loadAll(dir, "global");
+    expect(stored).toHaveLength(1);
+    expect(stored[0]!.text).toBe(text);
   });
 });
