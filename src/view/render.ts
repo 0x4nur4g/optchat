@@ -9,7 +9,7 @@ import { formatAddress } from "../tree/address";
 /** Text of a part, or null/undefined when the node has no summary yet. */
 export type GetText = (part: Part) => string | undefined | null;
 
-const OPEN = "<chat>";
+export const OPEN = "<chat>"; // shared with the cache splitter, never re-typed
 const CLOSE = "</chat>";
 /** Body of a row whose summary is not built yet. Size it as it renders. */
 export const NOT_BUILT = "(not summarized yet: zoom it)";

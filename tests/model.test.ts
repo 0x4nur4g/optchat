@@ -311,8 +311,9 @@ describe("native turns", () => {
   });
 
   test("cache view blocks stay before the separate last user block and no cache flags are invented", async () => {
-    const first = "😀".repeat(24_999) + "\n";
-    const tail = "é".repeat(30_010);
+    const rows = ["😀".repeat(6_000), "é".repeat(6_000), "界".repeat(6_000), "𐐀".repeat(6_000)];
+    const block = `${rows.join("\n")}\n`; // four whole lines: one cache block
+    const view = `<chat>\n${block}${block}last row`;
     const requests: any[] = [];
     const adapter = new OpenAICompat(env, {
       fetch: async (_url, init) => {
@@ -320,11 +321,12 @@ describe("native turns", () => {
         return Response.json({ choices: [{ message: { role: "assistant", content: "ok" } }] });
       },
     });
-    for await (const _entry of adapter.ask({ system: "stable", view: first + tail, userText: "new question" })) {}
+    for await (const _entry of adapter.ask({ system: "stable", view, userText: "new question" })) {}
     expect(requests[0].messages).toEqual([
       { role: "system", content: "stable" },
       { role: "user", content: [
-        { type: "text", text: first }, { type: "text", text: tail }, { type: "text", text: "new question" },
+        { type: "text", text: `<chat>\n${block}` }, { type: "text", text: block },
+        { type: "text", text: "last row" }, { type: "text", text: "new question" },
       ] },
     ]);
     expect(requests[0].prompt_cache_options).toBeUndefined();

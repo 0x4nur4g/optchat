@@ -189,10 +189,10 @@ for a separate data repository. It does not publish data to a remote repository.
 - JOBS 8 parallel compactor calls
 - TRIES 5 size attempts per node
 - CAP 30000 characters max tool result kept (head + cut note + tail)
-- MARKS 50000 / 80000 / 100000 character offsets for stable view pieces
+- Cache marks on the last four-line view block and the request end (character offsets)
 
 `NODE`, `VIEW`, and stored `size` fields use UTF-8 bytes via `Buffer.byteLength`.
-`CAP` and `MARKS` use character limits/offsets, not byte budgets. Character cuts
+`CAP` and cache marks use character limits/offsets, not byte budgets. Character cuts
 preserve surrogate pairs. None of these values are token counts. `NODE` is a target:
 after the size attempts, a model node may retain its shortest oversized reply.
 
@@ -200,8 +200,11 @@ after the size attempts, a model node may retain its shortest oversized reply.
 
 Native OpenAI-compatible Chat Completions relies on the provider's implicit
 prefix caching. The system prompt and tool definitions stay byte-identical.
-The view splitter forms stable text pieces at line ends before `MARKS`. This
-does not enable unsupported explicit cache flags or guarantee cache hits.
+The view is cut into four-line blocks: one cache mark sits on the last whole
+block, one on the request end after the new user text. The plan adapter sends
+one input block per view block and no explicit breakpoint field, because the
+ChatGPT plan route rejects that field (see [spec notes](docs/SPEC-NOTES.md)).
+No measured cache hit is claimed.
 
 Tests use offline scripted providers. They check request history, memory-tool
 execution, and storage/view behavior without real credentials. No live-provider

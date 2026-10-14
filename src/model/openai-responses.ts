@@ -1,3 +1,4 @@
+import { splitViewForCache } from "../cache/marks";
 import { capToolResult } from "../compactor/prompts";
 import type {
   CompactionAdapter,
@@ -90,10 +91,15 @@ export class OpenAIResponses implements TurnAdapter, CompactionAdapter {
     // Fresh state per turn. Within the turn the full history is resent, with
     // native call ids and their outputs kept intact.
     const input: InputItem[] = [...toolItems(this.options.tools ?? [])];
+    // One input_text per four-line cache block, then the new user text as the
+    // final block: the request end the spec marks. The plan route rejects
+    // explicit prompt_cache_breakpoint fields (docs/SPEC-NOTES.md, "Cache and
+    // test evidence"), so the block grid is the closest faithful form here.
+    const split = splitViewForCache(req.view, req.userText);
     input.push({
       role: "user",
       content: [
-        { type: "input_text", text: req.view },
+        ...split.pieces.filter(Boolean).map((text) => ({ type: "input_text", text })),
         { type: "input_text", text: req.userText },
       ],
     });
