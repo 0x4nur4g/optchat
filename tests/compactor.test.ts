@@ -14,6 +14,7 @@ function harness(messages: { kind: string; text: string }[]) {
     isBuilt: (l, i) => stored.has(nodeKey(l, i)),
     busy: new Set(),
     reported: new Set(),
+    failedAt: new Map(),
     adapter: {
       openCompaction(context, step, system, signal) {
         opened.push({ context, step, system, signal });
@@ -36,7 +37,6 @@ function harness(messages: { kind: string; text: string }[]) {
     },
     save: async (l, i, text) => { stored.set(nodeKey(l, i), text); },
     report: (_l, _i, err) => { reports.push(err); },
-    sleep: async () => {},
   };
   return { opts, stored, reports, opened, replies, feedback };
 }
@@ -307,49 +307,20 @@ describe("compactor cancellation", () => {
     expect(h.reports).toEqual([]);
   });
 
-  test("cancellation releases a delayed retry without waiting for its clock", async () => {
+  test("cancellation after failure starts no retry and needs no delayed cleanup", async () => {
     const h = harness([{ kind: "user", text: "x".repeat(600) }]);
     h.replies[0] = "";
     const controller = new AbortController();
     h.opts.signal = controller.signal;
-    let finish!: () => void;
-    const delayed = new Promise<void>((resolve) => { finish = resolve; });
-    const delays: number[] = [];
-    h.opts.sleep = (ms) => { delays.push(ms); return delayed; };
-    let wake!: () => void;
-    const released = new Promise<void>((resolve) => { wake = resolve; });
     let settled = 0;
-    h.opts.onSettled = () => { settled++; wake(); };
+    h.opts.onSettled = () => { settled++; };
     await pumpOnce(h.opts);
-    expect(delays).toEqual([10000]);
-    expect(h.opts.busy.size).toBe(1);
-    expect(settled).toBe(0);
-    controller.abort();
-    await released;
     expect(h.opts.busy.size).toBe(0);
     expect(settled).toBe(1);
-    expect(h.reports.length).toBe(1);
-    finish();
-    await delayed;
-    await Promise.resolve();
-    expect(settled).toBe(1);
+    controller.abort();
+    h.opts.T++;
     expect(await pumpOnce(h.opts)).toBe(0);
-  });
-
-  test("cancellation clears a real retry timer and wakes immediately", async () => {
-    const h = harness([{ kind: "user", text: "x".repeat(600) }]);
-    h.replies[0] = "";
-    delete h.opts.sleep;
-    const controller = new AbortController();
-    h.opts.signal = controller.signal;
-    let wake!: () => void;
-    const released = new Promise<void>((resolve) => { wake = resolve; });
-    h.opts.onSettled = wake;
-    await pumpOnce(h.opts);
-    expect(h.opts.busy.size).toBe(1);
-    controller.abort();
-    await released;
-    expect(h.opts.busy.size).toBe(0);
+    expect(settled).toBe(1);
     expect(h.reports.length).toBe(1);
   });
 
@@ -370,37 +341,103 @@ describe("compactor cancellation", () => {
 });
 
 describe("failure retries", () => {
-  test("every failure holds its busy slot for 10 seconds and only the first is reported", async () => {
-    const h = harness([{ kind: "user", text: "x".repeat(600) }]);
+  test("only appended messages unlock failures, with prompt cleanup and one report", async () => {
+    const messages = [{ kind: "user", text: "x".repeat(600) }];
+    const h = harness(messages);
     h.replies[0] = "";
-    const delays: number[] = [];
-    let release!: () => void;
-    h.opts.sleep = (ms) => {
-      delays.push(ms);
-      return new Promise<void>((resolve) => { release = resolve; });
-    };
-    let wake!: () => void;
     let settled = 0;
-    h.opts.onSettled = () => { settled++; wake(); };
-    for (let failure = 0; failure < 2; failure++) {
-      const released = new Promise<void>((resolve) => { wake = resolve; });
-      expect(await pumpOnce(h.opts)).toBe(1);
-      expect(h.opts.busy.has("0:0")).toBe(true);
+    h.opts.onSettled = () => { settled++; };
+    const append = () => {
+      messages.push({ kind: "note", text: "next" });
+      h.opts.T = messages.length;
+      h.opts.view.push({ l: 0, i: messages.length - 1, id: messages.length - 1, n: 1 });
+    };
+    for (let failure = 1; failure <= 2; failure++) {
+      // Fresh option objects still share caller-owned failure state.
+      expect(await pumpOnce({ ...h.opts })).toBe(1);
+      expect(h.opts.busy.size).toBe(0);
+      expect(h.opts.failedAt.get("0:0")).toBe(messages.length);
       expect(h.opts.reported.has("0:0")).toBe(true);
       expect(h.reports.length).toBe(1);
       expect(h.stored.size).toBe(0);
       expect(settled).toBe(failure);
-      expect(await pumpOnce(h.opts)).toBe(0);
-      release();
-      await released;
-      expect(h.opts.busy.size).toBe(0);
+      for (let wake = 0; wake < 20; wake++) expect(await pumpOnce({ ...h.opts })).toBe(0);
+      expect(h.opened.length).toBe(failure);
+      append();
     }
-    expect(delays).toEqual([10000, 10000]);
     h.replies[0] = "user: recovered";
     expect(await pumpOnce(h.opts)).toBe(1);
     expect(h.stored.get("0:0")).toBe("user: recovered");
+    expect(h.opts.failedAt.size).toBe(0);
     expect(h.opts.reported.size).toBe(0);
     expect(h.reports.length).toBe(1);
     expect(settled).toBe(3);
+  });
+
+  test("a message appended during a failing call unlocks its next attempt", async () => {
+    const messages = [{ kind: "user", text: "x".repeat(600) }];
+    const h = harness(messages);
+    let fail!: (err: Error) => void;
+    h.opts.adapter = { openCompaction: () => ({ reply: () => new Promise<string>((_resolve, reject) => { fail = reject; }) }) };
+    const running = pumpOnce(h.opts);
+    messages.push({ kind: "note", text: "arrived during request" });
+    h.opts.T = messages.length;
+    h.opts.view.push({ l: 0, i: 1, id: 1, n: 1 });
+    expect(await pumpOnce({ ...h.opts })).toBe(0);
+    fail(new Error("offline"));
+    await running;
+    expect(h.opts.failedAt.get("0:0")).toBe(1);
+    h.opts.adapter = { openCompaction: () => ({ reply: async () => "recovered" }) };
+    expect(await pumpOnce({ ...h.opts })).toBe(1);
+    expect(h.stored.get("0:0")).toBe("recovered");
+    expect(h.reports.length).toBe(1);
+  });
+
+  test("input that will become a message unlocks a retry before it is appended", async () => {
+    const h = harness([{ kind: "user", text: "x".repeat(600) }]);
+    h.replies[0] = "";
+    expect(await pumpOnce(h.opts)).toBe(1);
+    expect(await pumpOnce(h.opts)).toBe(0); // T unchanged: no new attempt
+    h.opts.epoch = h.opts.T + 1; // queued input arrived; the log has not grown
+    expect(await pumpOnce(h.opts)).toBe(1);
+    expect(await pumpOnce(h.opts)).toBe(0); // that arrival unlocked one attempt
+    expect(h.reports.length).toBe(1);
+  });
+
+  test("failed merges free slots for unrelated ready work without retrying", async () => {
+    const h = harness(Array.from({ length: 20 }, () => ({ kind: "note", text: "" })));
+    for (let i = 0; i < 20; i++) h.stored.set(nodeKey(0, i), "x".repeat(300));
+    const rejecters: ((err: Error) => void)[] = [];
+    h.opts.adapter = { openCompaction: () => ({ reply: () => new Promise<string>((_resolve, reject) => { rejecters.push(reject); }) }) };
+    let settled = 0;
+    h.opts.onSettled = () => { settled++; };
+    const running = pumpOnce(h.opts);
+    expect(h.opts.busy.size).toBe(8);
+    rejecters[0]!(new Error("offline"));
+    await new Promise<void>((resolve) => { queueMicrotask(resolve); });
+    expect(h.opts.busy.size).toBe(7);
+    expect(settled).toBe(1);
+    const extra = pumpOnce({ ...h.opts });
+    expect(h.opts.busy.size).toBe(8);
+    expect(rejecters.length).toBe(9);
+    expect(h.opts.busy.has("1:0")).toBe(false);
+    for (const reject of rejecters.slice(1)) reject(new Error("offline"));
+    await Promise.all([running, extra]);
+    expect(h.opts.busy.size).toBe(0);
+    expect(settled).toBe(9);
+    expect(h.reports.length).toBe(9);
+  });
+
+  test("save failures retain the unbuilt node until a new message", async () => {
+    const h = harness([{ kind: "note", text: "short" }]);
+    h.opts.save = async () => { throw new Error("disk failure"); };
+    expect(await pumpOnce(h.opts)).toBe(1);
+    expect(await pumpOnce(h.opts)).toBe(0);
+    expect(h.stored.size).toBe(0);
+    expect(h.opts.busy.size).toBe(0);
+    expect(h.reports.length).toBe(1);
+    h.opts.T++;
+    expect(await pumpOnce(h.opts)).toBe(1);
+    expect(h.reports.length).toBe(1);
   });
 });

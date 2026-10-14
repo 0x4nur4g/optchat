@@ -1,7 +1,7 @@
 // Compactor pump: pure ordering logic (which tree node to build next) plus
 // an async runner skeleton. No I/O here except the injected model adapter;
 // storage, view and persistence stay with the caller (turn/cli).
-import { JOBS, NODE, RETRY_MS, TRIES, byteLen } from "../constants";
+import { JOBS, NODE, TRIES, byteLen } from "../constants";
 import type { CompactionAdapter } from "../model/adapter";
 import { nodeKey } from "../tree/address";
 import type { IsBuilt, Part } from "../view/fold";
@@ -55,6 +55,11 @@ export interface PumpOptions {
   isBuilt: IsBuilt;
   busy: Set<string>; // keys of nodes running now; kept by the caller
   reported: Set<string>; // keys whose first failure was reported; kept by the caller
+  failedAt: Map<string, number>; // failed attempt's starting generation; kept by the caller
+  // Retry generation: how far the chat has advanced. Defaults to T, so a failed
+  // node is retried at the next appended message. A caller that settles before
+  // it can append may advance it earlier, on input that will become a message.
+  epoch?: number;
   adapter: CompactionAdapter;
   // Level 0: the message's bare kind and its whole text.
   message: (i: number) => { kind: string; text: string };
@@ -67,49 +72,36 @@ export interface PumpOptions {
   // First failure of a node; the caller logs it.
   report: (l: number, i: number, err: unknown) => void;
   signal?: AbortSignal;
-  // Wake the caller whenever a running or delayed node releases its busy slot.
+  // Wake the caller whenever a running node releases its busy slot.
   onSettled?: () => void;
-  // Test hook; defaults to a real timer.
-  sleep?: (ms: number) => Promise<void>;
-}
-
-function delay(ms: number, signal?: AbortSignal, sleep?: PumpOptions["sleep"]): Promise<void> {
-  return new Promise((resolve) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const done = () => {
-      if (timer !== undefined) clearTimeout(timer);
-      signal?.removeEventListener("abort", done);
-      resolve();
-    };
-    if (signal?.aborted) return done();
-    signal?.addEventListener("abort", done, { once: true });
-    if (sleep) void Promise.resolve().then(() => sleep(ms)).then(done, done);
-    else timer = setTimeout(done, ms);
-  });
 }
 
 // Start up to JOBS nodes and resolve when those runs end; the caller
-// re-invokes while it returns a positive count. A failed node keeps its
-// busy slot until RETRY_MS passes, then frees for another try; only its
-// first failure is reported.
+// re-invokes while it returns a positive count. Failures release capacity
+// immediately, but only a greater retry generation permits another attempt:
+// T grows when a message is appended; a caller's epoch may advance earlier,
+// on input that will become a message. Record the generation at dispatch, so
+// chat advancing during the call also unlocks a retry.
 export async function pumpOnce(opts: PumpOptions): Promise<number> {
   if (opts.signal?.aborted) return 0;
   const first = firstUnbuilt(opts.view, opts.isBuilt);
   const free = JOBS - opts.busy.size;
   if (free <= 0) return 0;
-  const picked = candidates(opts.T, opts.isBuilt, opts.busy, first).slice(0, free);
+  const at = opts.epoch ?? opts.T;
+  const picked = candidates(opts.T, opts.isBuilt, opts.busy, first)
+    .filter((c) => (opts.failedAt.get(nodeKey(c.l, c.i)) ?? -1) < at)
+    .slice(0, free);
   for (const c of picked) opts.busy.add(nodeKey(c.l, c.i));
-  await Promise.allSettled(picked.map((c) => runNode(opts, c)));
+  await Promise.allSettled(picked.map((c) => runNode(opts, c, at)));
   return picked.length;
 }
 
-async function runNode(opts: PumpOptions, c: Candidate): Promise<void> {
+async function runNode(opts: PumpOptions, c: Candidate, at: number): Promise<void> {
   const key = nodeKey(c.l, c.i);
   const settled = () => {
     opts.busy.delete(key);
     opts.onSettled?.();
   };
-  let delayed = false;
   let saving = false;
   try {
     opts.signal?.throwIfAborted();
@@ -149,18 +141,16 @@ async function runNode(opts: PumpOptions, c: Candidate): Promise<void> {
     saving = true;
     // Never race a durable save against cancellation; shutdown must await it.
     await opts.save(c.l, c.i, accepted);
+    opts.failedAt.delete(key);
     opts.reported.delete(key); // a later failure is reported again
   } catch (err) {
     if (opts.signal?.aborted && !saving) return;
+    opts.failedAt.set(key, at);
     if (!opts.reported.has(key)) {
       opts.reported.add(key);
       opts.report(c.l, c.i, err);
     }
-    if (!opts.signal?.aborted) {
-      delayed = true;
-      void delay(RETRY_MS, opts.signal, opts.sleep).then(settled);
-    }
   } finally {
-    if (!delayed) settled();
+    settled();
   }
 }

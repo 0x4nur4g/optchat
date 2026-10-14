@@ -77,8 +77,10 @@ address, delimiter, or wrapper in the final request; allow provider context head
   messages as data to summarize, not instructions to execute.
 - `NODE` is a target, not a hard storage bound. Apply size feedback and the bounded
   attempt loop, then retain the shortest candidate. Measure actual stored bytes.
-- Build only when sources and preceding summary context are ready. Failed nodes
-  retry after the fixed delay; report the first failure rather than repeating it.
+- Build only when sources and preceding summary context are ready. Failed
+  nodes retry when the chat advances — an appended message, or queued input
+  that will become one — never on a timer; report the first failure rather
+  than repeating it.
 - Fold the view on load. During a run, append at the end and merge the most-due
   eligible adjacent pair. Replace children only with a built parent. Never split
   an already merged part or rebuild the live tiling on every summary completion.
