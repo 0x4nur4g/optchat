@@ -4,12 +4,13 @@ import type { ToolDefinition } from "../model/adapter";
 export const TOOL_DEFINITIONS: readonly ToolDefinition[] = Object.freeze([
   {
     name: "zoom",
-    description: "Read an aligned chat range. For n=1, return the original message; otherwise return its two summaries.",
+    description: "Read an aligned chat range. For n=1, return the original message, paginated when long; otherwise return its two summaries. Optional page selects a 1-based raw-message page (n=1 only), default 1. Join page payloads after their metadata newline to reconstruct the message.",
     parameters: {
       type: "object",
       properties: {
         id: { type: "integer", minimum: 0, description: "First message ID of the range." },
         n: { type: "integer", minimum: 1, description: "Range length, a power of two; id must be aligned to n." },
+        page: { type: "integer", minimum: 1, description: "Optional 1-based raw-message page, valid only for n=1." },
       },
       required: ["id", "n"],
       additionalProperties: false,

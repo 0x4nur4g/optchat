@@ -385,7 +385,7 @@ const dateAt = memoryDateAt(messages);
 
 function runTool(name: string, input: Record<string, unknown>): string {
   if (name === "zoom") {
-    return zoom(zoomStore, Number(input["id"]), Number(input["n"]), messages.length);
+    return zoom(zoomStore, Number(input["id"]), Number(input["n"]), messages.length, input["page"]);
   }
   if (name === "date") return lookup(dateAt, Number(input["id"]));
   return `Unknown tool ${name}.`;

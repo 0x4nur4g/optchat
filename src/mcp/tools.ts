@@ -79,6 +79,7 @@ export function memoryTools(base: string, scope: string): McpTool[] {
           Number(input["id"]),
           Number(input["n"]),
           memory.messages.length,
+          input["page"],
         );
       },
     },

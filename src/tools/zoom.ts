@@ -9,7 +9,7 @@
  */
 
 import { formatAddress, nodeKey } from "../tree/address";
-import type { LogMessage, TreeNode } from "../constants";
+import { CAP, type LogMessage, type TreeNode } from "../constants";
 
 export interface ZoomStore {
   /** Raw message at id as "kind: text", or null when absent. */
@@ -43,8 +43,11 @@ export function memoryZoomStore(
   };
 }
 
-export function zoom(store: ZoomStore, id: number, n: number, T: number): string {
+export function zoom(store: ZoomStore, id: number, n: number, T: number, page?: unknown): string {
   const noLine = `No line ${formatAddress(id, n)}.`;
+  if (page !== undefined && (typeof page !== "number" || !Number.isSafeInteger(page) || page < 1 || n !== 1)) {
+    return "Invalid page: use a positive integer only with n=1.";
+  }
 
   if (!Number.isSafeInteger(id) || !Number.isSafeInteger(n)) return noLine;
   if (!Number.isSafeInteger(T) || T < 0) return noLine;
@@ -55,7 +58,26 @@ export function zoom(store: ZoomStore, id: number, n: number, T: number): string
   if (n === 1) {
     const msg = store.getMessage(id);
     if (msg === null) return noLine;
-    return `${formatAddress(id, 0)}|${msg}`;
+    const address = formatAddress(id, 0);
+    const whole = `${address}|${msg}`;
+    if (whole.length <= CAP) return page === undefined || page === 1 ? whole : "No page: message has 1 page.";
+    // Reserve more than the maximum header size (safe integer ID, page/count,
+    // and two UTF-16 offsets). Fixed payload boundaries make pages repeatable.
+    const room = CAP - 100;
+    const cuts = [0];
+    while (cuts[cuts.length - 1]! < msg.length) {
+      const start = cuts[cuts.length - 1]!;
+      let end = Math.min(start + room, msg.length);
+      if (end < msg.length && msg.charCodeAt(end - 1) >= 0xd800 && msg.charCodeAt(end - 1) <= 0xdbff &&
+          msg.charCodeAt(end) >= 0xdc00 && msg.charCodeAt(end) <= 0xdfff) end--;
+      cuts.push(end);
+    }
+    const selected = page === undefined ? 1 : page as number;
+    const count = cuts.length - 1;
+    if (selected > count) return `No page: message has ${count} pages.`;
+    const start = cuts[selected - 1]!;
+    const end = cuts[selected]!;
+    return `${address}|page ${selected}/${count} chars ${start}:${end}\n${msg.slice(start, end)}`;
   }
 
   const kids = store.getNodeChildren(id, n);
