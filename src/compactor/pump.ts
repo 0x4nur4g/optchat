@@ -17,10 +17,14 @@ export interface Candidate {
   end: number;
 }
 
-// First message whose view line is unbuilt; T (total messages) when every
-// line is built. The view tiles [0, T) oldest first, so T = last.id + last.n.
-export function firstUnbuilt(view: Part[], isBuilt: IsBuilt): number {
-  for (const part of view) if (!isBuilt(part.l, part.i)) return part.id;
+// First message whose view line is unbuilt once `allowance` unbuilt lines
+// are tolerated (default 0: the first unbuilt line); T (total messages)
+// when fewer unbuilt lines remain. The view tiles [0, T) oldest first,
+// so T = last.id + last.n.
+export function firstUnbuilt(view: Part[], isBuilt: IsBuilt, allowance = 0): number {
+  for (const part of view) {
+    if (!isBuilt(part.l, part.i) && allowance-- === 0) return part.id;
+  }
   if (view.length === 0) return 0;
   const last = view[view.length - 1];
   return last.id + last.n;
@@ -29,12 +33,14 @@ export function firstUnbuilt(view: Part[], isBuilt: IsBuilt): number {
 // Buildable nodes, in the reference order (leaves oldest first, then each
 // merge level):
 //   not built, not busy, sources ready (level 0: the message exists;
-//   level > 0: both children built), and end <= first so that every view
-//   line before the node's end is already a built summary.
+//   level > 0: both children built), and end <= first for merges (every
+//   view line before the node's end is already a built summary), while a
+//   leaf only needs end <= leafFirst: up to 7 unbuilt view lines may
+//   precede its message.
 // `end` is i for level 0 (its message) and (i+1)*2^l for a merge (exclusive).
 // The caller passes first = firstUnbuilt(...); the default T means "no
 // frontier" and returns every buildable node.
-export function candidates(T: number, isBuilt: IsBuilt, busy: Set<string>, first: number = T): Candidate[] {
+export function candidates(T: number, isBuilt: IsBuilt, busy: Set<string>, first: number = T, leafFirst: number = first): Candidate[] {
   const out: Candidate[] = [];
   for (let l = 0; 2 ** l <= T; l++) {
     const span = 2 ** l;
@@ -42,7 +48,7 @@ export function candidates(T: number, isBuilt: IsBuilt, busy: Set<string>, first
       if (isBuilt(l, i) || busy.has(nodeKey(l, i))) continue;
       if (l > 0 && !(isBuilt(l - 1, 2 * i) && isBuilt(l - 1, 2 * i + 1))) continue;
       const end = l === 0 ? i : (i + 1) * span;
-      if (end > first) continue;
+      if (end > (l === 0 ? leafFirst : first)) continue;
       out.push({ l, i, end });
     }
   }
@@ -97,7 +103,10 @@ export async function pumpOnce(opts: PumpOptions): Promise<number> {
   const first = firstUnbuilt(opts.view, opts.isBuilt);
   const free = JOBS - opts.busy.size;
   if (free <= 0) return 0;
-  const picked = candidates(opts.T, opts.isBuilt, opts.busy, first).slice(0, free);
+  // A leaf may start with up to 7 unbuilt view lines before it; merges
+  // keep the strict frontier.
+  const leafFirst = firstUnbuilt(opts.view, opts.isBuilt, 7);
+  const picked = candidates(opts.T, opts.isBuilt, opts.busy, first, leafFirst).slice(0, free);
   for (const c of picked) opts.busy.add(nodeKey(c.l, c.i));
   await Promise.allSettled(picked.map((c) => runNode(opts, c)));
   return picked.length;

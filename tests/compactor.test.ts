@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { pumpOnce, nodeKey, type PumpOptions } from "../src/compactor/pump";
+import { candidates, firstUnbuilt, pumpOnce, nodeKey, type PumpOptions } from "../src/compactor/pump";
 import { NODE, byteLen } from "../src/constants";
 
 function harness(messages: { kind: string; text: string }[]) {
@@ -28,11 +28,14 @@ function harness(messages: { kind: string; text: string }[]) {
     children: (l, i) => [stored.get(nodeKey(l - 1, 2 * i))!, stored.get(nodeKey(l - 1, 2 * i + 1))!],
     context: (l, i) => {
       const end = l === 0 ? i : (i + 1) * 2 ** l;
-      return opts.view.filter((part) => part.id + part.n <= end).map((part) => {
+      const lines: string[] = [];
+      for (const part of opts.view) {
+        if (part.id + part.n > end) break;
         const text = stored.get(nodeKey(part.l, part.i));
-        if (text === undefined) throw new Error("unbuilt context");
-        return text;
-      });
+        if (text === undefined) break;
+        lines.push(text);
+      }
+      return lines;
     },
     save: async (l, i, text) => { stored.set(nodeKey(l, i), text); },
     report: (_l, _i, err) => { reports.push(err); },
@@ -65,8 +68,6 @@ describe("free nodes", () => {
     const h = harness([{ kind: "user", text: "x".repeat(506) }, { kind: "user", text: "x".repeat(507) }]);
     await pumpOnce(h.opts);
     expect(byteLen(h.stored.get("0:0")!)).toBe(NODE);
-    expect(h.opened).toEqual([]);
-    await pumpOnce(h.opts);
     expect(h.opened.length).toBe(1);
     expect(h.stored.get("0:1")).toBe("user: summary");
   });
@@ -102,7 +103,7 @@ describe("compaction sessions", () => {
 
   test("model context flattens free summaries while preserving complete source text", async () => {
     const h = harness([{ kind: "user", text: "first\r\nsecond" }, { kind: "echo", text: "原".repeat(600) + "\nlast" }]);
-    await pumpOnce(h.opts);
+    h.stored.set("0:0", "user: first\r\nsecond");
     await pumpOnce(h.opts);
     expect(h.opened[0]!.context).toEqual(["user: first second"]);
     expect(h.opened[0]!.step.endsWith("echo: " + "原".repeat(600) + "\nlast")).toBe(true);
@@ -139,20 +140,57 @@ describe("compaction sessions", () => {
 });
 
 describe("build order and readiness", () => {
-  test("leaves build sequentially with only complete preceding summary context", async () => {
+  test("leaf eligibility permits zero or seven preceding gaps but not eight", async () => {
+    for (const gaps of [0, 7, 8]) {
+      const h = harness(Array.from({ length: gaps + 1 }, () => ({ kind: "note", text: "x".repeat(600) })));
+      for (let i = 0; i < gaps; i++) h.opts.busy.add(nodeKey(0, i));
+      // Busy leaves still count as unbuilt view lines and consume JOBS slots.
+      if (gaps === 8) h.opts.busy.delete(nodeKey(0, 0));
+      const selected = candidates(h.opts.T, h.opts.isBuilt, h.opts.busy,
+        firstUnbuilt(h.opts.view, h.opts.isBuilt), firstUnbuilt(h.opts.view, h.opts.isBuilt, 7));
+      expect(selected.some((c) => c.l === 0 && c.i === gaps)).toBe(gaps < 8);
+      expect(await pumpOnce(h.opts)).toBe(1);
+      expect(h.stored.has(nodeKey(0, gaps))).toBe(gaps < 8);
+      expect(h.reports).toEqual([]);
+    }
+  });
+
+  test("the allowance counts mixed-size view parts rather than message IDs", () => {
+    const view = [
+      { l: 3, i: 0, id: 0, n: 8 },
+      { l: 2, i: 2, id: 8, n: 4 },
+      ...Array.from({ length: 9 }, (_, j) => ({ l: 0, i: 12 + j, id: 12 + j, n: 1 })),
+    ];
+    const built = (l: number, i: number) => l > 0 || i === 13;
+    expect(firstUnbuilt(view, built)).toBe(12);
+    expect(firstUnbuilt(view, built, 7)).toBe(20);
+    const selected = candidates(21, built, new Set(["0:12"]), 12, firstUnbuilt(view, built, 7));
+    expect(selected.filter((c) => c.l === 0).map((c) => c.i)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18, 19, 20]);
+    expect(selected.filter((c) => c.l > 0).every((c) => c.end <= 12)).toBe(true);
+  });
+
+  test("busy leaves are not restarted and later built lines never skip a context hole", async () => {
+    const h = harness(Array.from({ length: 5 }, () => ({ kind: "note", text: "x".repeat(600) })));
+    h.stored.set("0:0", "complete prefix");
+    h.stored.set("0:2", "must not skip the hole");
+    h.opts.busy.add("0:1");
+    expect(await pumpOnce(h.opts)).toBe(2);
+    expect(h.opened.map((call) => call.context)).toEqual([["complete prefix"], ["complete prefix"]]);
+    expect(h.stored.has("0:1")).toBe(false);
+    expect(h.opts.busy).toEqual(new Set(["0:1"]));
+    expect(h.reports).toEqual([]);
+  });
+
+  test("leaves start together with context clipped before unbuilt summaries", async () => {
     const h = harness([
       { kind: "user", text: "first\n" + "a".repeat(600) },
       { kind: "talk", text: "second\n" + "b".repeat(600) },
       { kind: "echo", text: "third\n" + "c".repeat(600) },
     ]);
+    expect(await pumpOnce(h.opts)).toBe(3);
+    expect([...h.stored.keys()]).toEqual(["0:0", "0:1", "0:2"]);
     expect(await pumpOnce(h.opts)).toBe(1);
-    expect([...h.stored.keys()]).toEqual(["0:0"]);
-    expect(await pumpOnce(h.opts)).toBe(1);
-    expect([...h.stored.keys()]).toEqual(["0:0", "0:1"]);
-    expect(await pumpOnce(h.opts)).toBe(2); // newest leaf and the first ready parent
-    expect(h.opened.map((call) => call.context)).toEqual([
-      [], ["user: summary"], ["user: summary", "user: summary"],
-    ]);
+    expect(h.opened.map((call) => call.context)).toEqual([[], [], []]);
     expect(h.stored.get("1:0")).toBe("user: summary\nuser: summary");
     expect(h.reports).toEqual([]);
   });
