@@ -1,8 +1,53 @@
 # OptChat core spec notes
 
-Reference: [OptChat specification, pinned revision](https://gist.githubusercontent.com/VictorTaelin/91837951a5ce5b38f341ec1ba1df6449/raw/f51fe5c910427fd6f384d22823140b1693c76207/optchat.md).
+Reference: [OptChat specification, pinned revision](https://gist.githubusercontent.com/VictorTaelin/91837951a5ce5b38f341ec1ba1df6449/raw/3c190e06f34aba0c69f49042c526093269604935/optchat.md).
 This file records the core contract and release limits. It does not reproduce
 the reference's prompts. Repository prompts use original wording.
+
+## Spec parity (recorded 2026-10-14)
+
+Status against pinned revision `3c190e06`, verified in this tree at `0ec3b2f`.
+Adopted parts were confirmed in `src/` at recording time. Divergent parts each
+carry their tracking issue; all twelve are open and none is claimed fixed here.
+
+Adopted:
+
+- Merge order measures a pair's due time from its last message
+  (`bestPair` in `src/view/fold.ts`), not from its first.
+- View merges are batched: the live view grows without merging and drops
+  to `LOW` in one batch once past `VIEW` (`sawtooth` in `src/view/fold.ts`).
+- The view is persisted and resumed, never rebuilt from the log
+  (`src/view/persist.ts`).
+- One shared system prompt serves turns and compactions byte-identically
+  (`TURN_SYSTEM = SHARED_SYSTEM` in `src/turn/loop.ts`), so compactions
+  read the cached prefix the turns already wrote.
+
+Divergent:
+
+- #1 Subagent reports are user messages starting `[id] `; there is no
+  stored `work` kind.
+- #2 Long non-tool text is logged as one message, not several.
+- #3 View marks are fixed `MARKS` offsets (50000/80000/100000), not
+  4-line blocks plus the request end.
+- #4 Compactions take their context from the view lines before the node,
+  not from their own 16-32 KB context view.
+- #5 The compactor's size ruler is a realistic sample line (`SCALE_LINE`),
+  not 512 dashes.
+- #6 Compaction payloads are wrapped in plain sentences, not input tags.
+- #7 Every node waits for the fully built frontier (`end <= firstUnbuilt`
+  in `src/compactor/pump.ts`); the spec lets a leaf start with up to 7
+  unbuilt lines before it.
+- #8 A merge also waits for that frontier; the spec starts a merge when
+  both its halves are built.
+- #9 The pump rescans the tree for buildable nodes instead of keeping
+  ready queues.
+- #10 A failed compaction retries on the fixed `RETRY_MS` timer, not at
+  the next message.
+- #11 `zoom(id, 1)` returns the stored message whole, capped by `CAP`.
+  The spec defines no paging API, so the paging design in #11 is a
+  deliberate deviation, not a parity gap.
+- #12 The turn system prompt carries one navigation rule; the spec
+  carries two.
 
 ## Release boundary
 
