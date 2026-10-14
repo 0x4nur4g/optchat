@@ -5,6 +5,8 @@ import * as path from "node:path";
 import { tempPath } from "./tmp";
 import { capture } from "../src/storage/capture";
 import { dayFile, loadAll, openLog } from "../src/storage/log";
+import { memoryZoomStore, zoom } from "../src/tools/zoom";
+import { pumpOnce, nodeKey } from "../src/compactor/pump";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 const fixtures: string[] = [];
@@ -20,6 +22,33 @@ afterEach(async () => {
 });
 
 describe("capture module", () => {
+  test("stored work reports are readable and retain their kind in free summaries", async () => {
+    const dir = await fixture();
+    await capture(dir, "global", "user", "[id] legacy report");
+    const text = "[Scout] mapped 原文 😀\n  exact findings";
+    await capture(dir, "global", "work", text);
+    await capture(dir, "global", "talk", "our reply");
+    const messages = await loadAll(dir, "global");
+    expect(messages.map((m) => m.kind)).toEqual(["user", "work", "talk"]);
+    expect(messages[1]!.size).toBe(Buffer.byteLength(`work: ${text}`, "utf8"));
+    expect(zoom(memoryZoomStore(messages, new Map()), 1, 1, messages.length))
+      .toBe(`1+0|work: ${text}`);
+    const summaries = new Map<string, string>();
+    await pumpOnce({
+      T: 1, view: [{ l: 0, i: 0, id: 0, n: 1 }],
+      isBuilt: (l, i) => summaries.has(nodeKey(l, i)),
+      busy: new Set(), reported: new Set(),
+      message: () => messages[1]!,
+      children: () => { throw new Error("unexpected merge"); },
+      context: () => [],
+      adapter: { openCompaction: () => { throw new Error("short report must be free"); } },
+      save: async (l, i, summary) => { summaries.set(nodeKey(l, i), summary); },
+      report: (_l, _i, error) => { throw error; },
+    });
+    expect(summaries.get("0:0")).toBe(`work: ${text}`);
+    expect((await openLog(dir, "global")).messages).toEqual(messages);
+  });
+
   test("appends a durable message and returns it", async () => {
     const dir = await fixture();
     const message = await capture(dir, "global", "user", "hello");
@@ -94,6 +123,15 @@ describe("capture CLI", () => {
     const out = await run(dir, ["--kind", "user"], "from stdin\nsecond line\n");
     expect(out.code).toBe(0);
     expect((await loadAll(dir, "global"))[0]!.text).toBe("from stdin\nsecond line\n");
+  });
+
+  test("captures named work reports through the CLI", async () => {
+    const dir = await fixture();
+    const text = "[Scout] checked storage\nall clear 😀";
+    const out = await run(dir, ["--kind", "work"], text);
+    expect(out.code).toBe(0);
+    expect(out.stderr).toBe("");
+    expect((await loadAll(dir, "global"))[0]).toMatchObject({ kind: "work", text });
   });
 
   test("an invalid kind exits non-zero and writes nothing", async () => {

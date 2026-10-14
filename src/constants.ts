@@ -9,7 +9,7 @@ export const MARKS = [50_000, 80_000, 100_000]; // cache breakpoints (chars)
 
 export const SCOPES = ["global"] as const;
 
-export type Kind = "user" | "talk" | "tool" | "echo" | "note";
+export type Kind = "user" | "talk" | "tool" | "echo" | "note" | "work";
 
 export interface LogMessage {
   i: number;

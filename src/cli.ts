@@ -77,7 +77,7 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
 --mcp              Serve read-only memory tools (recall, zoom, date) over stdio for MCP
                    clients. No model and no writer lock; exits when stdin ends.
 --capture          Append one message and exit. No model needed.
---kind KIND        With --capture: user, talk, tool, echo or note (default user).
+--kind KIND        With --capture: user, talk, tool, echo, note or work (default user).
 --text TEXT        With --capture: the message. Without it, the message is read from stdin.
 --login            Sign in with ChatGPT and store the credential, then exit.
 --fresh            With --login: register again rather than reuse the saved account.

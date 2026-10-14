@@ -4,7 +4,7 @@ import type { Kind, LogMessage } from "../constants";
 
 // Kinds a capture hook may write. Reasoning is deliberately absent: capture
 // records what was said, never a model's hidden working.
-const CAPTURE_KINDS: readonly string[] = ["user", "talk", "tool", "echo", "note"];
+const CAPTURE_KINDS: readonly string[] = ["user", "talk", "tool", "echo", "note", "work"];
 
 /**
  * Append one message that arrived outside the interactive loop, then release
@@ -22,7 +22,7 @@ export async function capture(
     throw new Error("optchat: capture needs non-empty text");
   }
   if (typeof kind !== "string" || !CAPTURE_KINDS.includes(kind)) {
-    throw new Error("optchat: capture kind must be one of user, talk, tool, echo, note");
+    throw new Error("optchat: capture kind must be one of user, talk, tool, echo, note, work");
   }
   const lock = await acquireLock(base);
   try {
