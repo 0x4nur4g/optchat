@@ -44,6 +44,10 @@ convention, not an available `spawn` or `tell` tool.
 - `zoom(id, n)` navigates an aligned binary range. At `n = 1`, it reads the stored
   message. `date(id)` reads that message's stored timestamp. Tool-result capping
   applies even when the source message is larger than the result limit.
+- The turn prompt carries two navigation rules: the view's newest mention of a
+  thing is the one that counts, so zoom it to the whole message before any other
+  source and before acting, assuming or asking; and zoom is the only way through
+  memory, never a grep or search of the chat or tree files.
 
 ## Units and Unicode
 
