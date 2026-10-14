@@ -34,6 +34,7 @@ import { loadAllNodes, saveNode } from "./storage/tree-store";
 import { nodeKey } from "./tree/address";
 import { appendAndFit, sawtooth } from "./view/fold";
 import type { Part } from "./view/fold";
+import { CompactionView } from "./view/compaction";
 import { resumeView, saveView } from "./view/persist";
 import { NOT_BUILT, renderBefore, renderView } from "./view/render";
 import { pumpOnce } from "./compactor/pump";
@@ -438,17 +439,7 @@ function idleWait(observed: number): Promise<void> {
   });
 }
 
-/** View lines (text only, no ids) before the node's end, oldest first. */
-function contextOf(snapshot: Part[], l: number, i: number): string[] {
-  const end = l === 0 ? i : (i + 1) * 2 ** l;
-  const lines: string[] = [];
-  for (const p of snapshot) {
-    if (p.id + p.n > end) break;
-    const text = nodes.get(nodeKey(p.l, p.i))?.text;
-    if (text !== undefined) lines.push(text.replace(/\r\n|\r|\n/g, " "));
-  }
-  return lines;
-}
+const compactionView = new CompactionView();
 
 async function pumpLoop(): Promise<void> {
   const compressor = model;
@@ -456,6 +447,7 @@ async function pumpLoop(): Promise<void> {
   while (!stopPump) {
     const observed = pumpVersion;
     const snapshot = view;
+    compactionView.update(snapshot, messages.length, sizeOf, isBuilt);
     const started = await pumpOnce({
       T: messages.length,
       view: snapshot,
@@ -474,7 +466,7 @@ async function pumpLoop(): Promise<void> {
         nodes.get(nodeKey(l - 1, 2 * i))?.text ?? "",
         nodes.get(nodeKey(l - 1, 2 * i + 1))?.text ?? "",
       ],
-      context: (l, i) => contextOf(snapshot, l, i),
+      context: (l, i) => compactionView.contextOf(l, i, getText),
       save: async (l, i, text) => {
         const node: TreeNode = { l, i, text, size: byteLen(text) };
         await saveNode(dir, scope, node);
