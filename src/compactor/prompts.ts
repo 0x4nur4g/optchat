@@ -1,8 +1,7 @@
 // Compactor and turn prompts, plus the step builders the pump feeds to the
 // cheap model. Wording here is original; it follows the same structure as
 // the architecture spec (see README "License note").
-import { CAP, NODE, byteLen } from "../constants";
-import { cutAtBytes } from "./size";
+import { CAP, NODE } from "../constants";
 
 // Compaction guidance. This is a section of the shared system prompt rather
 // than a prompt of its own: turns and compactions must send byte-identical
@@ -121,34 +120,20 @@ you act, guess or ask. date(id) returns the date and time of message id.`;
 export const SHARED_SYSTEM: string =
   MASTER_SYSTEM + "\n\n" + VIEW_DOC + "\n\n" + COMPACT_SYSTEM;
 
-// A realistic dense summary line of exactly NODE bytes, used by the step
-// builders so the model can feel the size. Constructed deterministically;
-// the assert below fails at load if construction ever stops being exact.
-const SCALE_BASE =
-  `user: asked the log stay the only truth, never edited; wants short replies and exact paths; ` +
-  `corrected the merge order twice. work: subagent mapped the write paths; the lock is a unix ` +
-  `socket. echo: bun test 34 pass, 0 fail; tsc clean. talk: explained the view renders before ` +
-  `the new message is logged and lines only coarsen, never split. note: the older tool used ` +
-  `fixed 280 byte lines. tool: wrote src/storage/tree.ts, fsynced each append. user: decided ` +
-  `NODE stays 512 bytes, tokens never appear in stored sizes.`;
+// The length sample for both step builders: a ruler of NODE ASCII dashes,
+// one byte apiece, so it is exactly as wide as a line may run. Models cannot
+// count bytes, so they have to see the size; a realistic sample line showed
+// it just as well, but its content kept being copied into real summaries,
+// so the ruler is content-free.
+const SCALE_RULER: string = "-".repeat(NODE);
 
-function fitToNode(s: string): string {
-  const n = byteLen(s);
-  if (n === NODE) return s;
-  if (n < NODE) return s + " ".repeat(NODE - n);
-  return cutAtBytes(s, NODE);
-}
-
-export const SCALE_LINE: string = fitToNode(SCALE_BASE);
-if (byteLen(SCALE_LINE) !== NODE) {
-  throw new Error(`SCALE_LINE must be exactly ${NODE} bytes; got ${byteLen(SCALE_LINE)}`);
-}
+const SCALE_BLOCK: string = `One line of summary runs to ${NODE} bytes at most, roughly 70 words; this ruler is that wide:
+${SCALE_RULER}`;
 
 // Step for a level-0 node: the message whole, newlines kept, with its kind.
 // `kind` is the bare kind ("user", "tool", ...); the ": " is added here.
 export function buildCompressStep(kind: string, text: string): string {
-  return `A real summary line of exactly ${NODE} bytes, for scale:
-${SCALE_LINE}
+  return `${SCALE_BLOCK}
 
 Summarize this message as one line, at most ${NODE} bytes; keep it whole, newlines included:
 ${kind}: ${text}`;
@@ -158,8 +143,7 @@ ${kind}: ${text}`;
 // flattened to spaces here), no ids.
 export function buildMergeStep(a: string, b: string): string {
   const flatten = (s: string): string => s.replace(/\r\n?|\n/g, " ");
-  return `A real summary line of exactly ${NODE} bytes, for scale:
-${SCALE_LINE}
+  return `${SCALE_BLOCK}
 
 Merge these two neighboring lines into a single line, at most ${NODE} bytes:
 ${flatten(a)}

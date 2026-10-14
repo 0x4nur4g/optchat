@@ -5,6 +5,7 @@ import { tempPath } from "./tmp";
 import * as path from "node:path";
 import { dayFile, loadAll, openLog } from "../src/storage/log";
 import { saveNode } from "../src/storage/tree-store";
+import { NODE } from "../src/constants";
 import { TURN_SYSTEM } from "../src/turn/loop";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
@@ -77,12 +78,12 @@ type NativeRequest = {
 
 // A compaction and a turn now carry the same tools and system text, which is
 // what lets compactions reuse the turns' cached prefix. They are told apart by
-// the task instead: a compaction's second text block is the size-scale step.
+// the task instead: a compaction's step carries the 512-dash size ruler.
 function isCompaction(body: NativeRequest): boolean {
   const content = (body.messages as Array<{ content?: unknown }>)[1]?.content;
   const parts = Array.isArray(content) ? content : [];
   return parts.some((part) =>
-    String((part as { text?: unknown }).text ?? "").startsWith("A real summary line"));
+    String((part as { text?: unknown }).text ?? "").includes("-".repeat(NODE)));
 }
 
 function provider(respond: (body: NativeRequest) => Response | Promise<Response>) {

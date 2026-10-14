@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   COMPACT_SYSTEM,
-  SCALE_LINE,
   buildCompressStep,
   buildMergeStep,
   capToolResult,
@@ -13,9 +12,6 @@ import { CAP, NODE, byteLen } from "../src/constants";
 const ID_MARK = /\d+\+\d+\|/;
 
 describe("AGENTS.md rule 5: compactor input adds no node IDs", () => {
-  test("SCALE_LINE carries no id+n marker", () => {
-    expect(SCALE_LINE).not.toMatch(ID_MARK);
-  });
   test("COMPACT_SYSTEM carries no id+n marker", () => {
     expect(COMPACT_SYSTEM).not.toMatch(ID_MARK);
   });
@@ -65,6 +61,30 @@ describe("AGENTS.md rule 5: compactor input adds no node IDs", () => {
   });
 });
 
+describe("issue #5: the size sample is a dash ruler, not a sample line", () => {
+  const RULER = "-".repeat(NODE);
+
+  test("both step builders show one 512-byte dash ruler and the word-count hint", () => {
+    const steps = [
+      buildCompressStep("user", "fix the merge order"),
+      buildMergeStep("first line", "plain child"),
+    ];
+    for (const step of steps) {
+      expect(step).toContain(`\n${RULER}\n`);
+      expect(step.split(RULER).length).toBe(2); // the ruler appears exactly once
+      expect(step).toContain("70 words");
+    }
+    expect(byteLen(RULER)).toBe(512);
+  });
+
+  test("no realistic sample line rides along in a step", () => {
+    for (const step of [buildCompressStep("user", "hello"), buildMergeStep("a", "b")]) {
+      expect(step).not.toContain("real summary line");
+      expect(step).not.toContain("asked the log stay");
+    }
+  });
+});
+
 describe("AGENTS.md rule 5: model compactor output is one line only", () => {
   test("multi-line model reply is saved as a single line", async () => {
     const busy = new Set<string>();
@@ -98,10 +118,6 @@ describe("AGENTS.md rule 5: model compactor output is one line only", () => {
 });
 
 describe("compactor Unicode and size limits", () => {
-  test("scale line is exactly 512 UTF-8 bytes", () => {
-    expect(byteLen(SCALE_LINE)).toBe(512);
-  });
-
   test("byte cuts preserve a genuine complete replacement character", () => {
     expect(cutAtBytes("A\uFFFDB", 4)).toBe("A\uFFFD");
     expect(cutAtBytes("A\uFFFDB", 3)).toBe("A");
