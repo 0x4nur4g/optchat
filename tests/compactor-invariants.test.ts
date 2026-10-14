@@ -31,7 +31,25 @@ describe("AGENTS.md rule 5: compactor input adds no node IDs", () => {
     expect(step).not.toContain("first line\nsecond line");
   });
   test("merge steps flatten carriage returns without dropping any source text", () => {
-    expect(buildMergeStep("user: first\rsecond", "echo: third\r\nfourth").endsWith("user: first second\necho: third fourth")).toBe(true);
+    const step = buildMergeStep("user: first\rsecond", "echo: third\r\nfourth");
+    expect(step.endsWith("<input>\nuser: first second\necho: third fourth\n</input>")).toBe(true);
+  });
+  test("buildCompressStep wraps the message payload in input tags", () => {
+    const step = buildCompressStep("user", "fix the merge order");
+    expect(step).toContain("<input>\nuser: fix the merge order\n</input>");
+    expect(step.indexOf("<input>")).toBe(step.lastIndexOf("<input>"));
+    expect(step.indexOf("</input>")).toBe(step.lastIndexOf("</input>"));
+  });
+  test("buildMergeStep wraps both lines in one input block", () => {
+    const step = buildMergeStep("user: first", "echo: second");
+    expect(step).toContain("<input>\nuser: first\necho: second\n</input>");
+  });
+  test("merge step advice names the covered stretch without any address", () => {
+    const step = buildMergeStep("user: first", "echo: second");
+    expect(step).toContain("Together they cover one stretch of messages");
+    expect(step).toContain("<chat>");
+    expect(step).not.toMatch(ID_MARK);
+    expect(step).not.toMatch(/\d\+\d/); // no id+n address, even without the view's pipe
   });
   test("pump sends context and step without ID markers", async () => {
     const seen: { context: string[]; step: string }[] = [];
@@ -62,6 +80,8 @@ describe("AGENTS.md rule 5: compactor input adds no node IDs", () => {
     expect(seen.length).toBe(1);
     expect(seen[0]!.context.join("\n")).not.toMatch(ID_MARK);
     expect(seen[0]!.step).not.toMatch(ID_MARK);
+    expect(seen[0]!.step).toContain("<input>");
+    expect(seen[0]!.step).toContain("</input>");
   });
 });
 

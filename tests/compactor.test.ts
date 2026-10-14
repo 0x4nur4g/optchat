@@ -88,7 +88,7 @@ describe("compaction sessions", () => {
     h.replies.splice(0, 1, "  " + "a".repeat(534) + "\n", "b".repeat(520), "c".repeat(650), "d".repeat(515), "e".repeat(600));
     await pumpOnce(h.opts);
     expect(h.opened.length).toBe(1);
-    expect(h.opened[0]!.step.endsWith("user: " + source)).toBe(true);
+    expect(h.opened[0]!.step.endsWith("<input>\nuser: " + source + "\n</input>")).toBe(true);
     expect(h.feedback).toEqual([
       undefined,
       "That line is 534 bytes; limit 512. It must end where cut here: " + "a".repeat(512) + "| <- LIMIT",
@@ -105,7 +105,7 @@ describe("compaction sessions", () => {
     await pumpOnce(h.opts);
     await pumpOnce(h.opts);
     expect(h.opened[0]!.context).toEqual(["user: first second"]);
-    expect(h.opened[0]!.step.endsWith("echo: " + "原".repeat(600) + "\nlast")).toBe(true);
+    expect(h.opened[0]!.step.endsWith("<input>\necho: " + "原".repeat(600) + "\nlast\n</input>")).toBe(true);
   });
 
   test("retries stop as soon as a normalized reply fits the target", async () => {
@@ -134,7 +134,7 @@ describe("compaction sessions", () => {
     await pumpOnce(h.opts);
     await pumpOnce(h.opts);
     expect(h.opened[0]!.context).toEqual(["user: already saw 2184+8"]);
-    expect(h.opened[0]!.step.endsWith("user: " + source)).toBe(true);
+    expect(h.opened[0]!.step.endsWith("<input>\nuser: " + source + "\n</input>")).toBe(true);
   });
 });
 
@@ -169,7 +169,7 @@ describe("build order and readiness", () => {
       "user: " + "原".repeat(100) + " left end",
       "echo: " + "文".repeat(100) + " right end",
     ]);
-    expect(h.opened[0]!.step.endsWith("user: " + "原".repeat(100) + " left end\necho: " + "文".repeat(100) + " right end")).toBe(true);
+    expect(h.opened[0]!.step.endsWith("<input>\nuser: " + "原".repeat(100) + " left end\necho: " + "文".repeat(100) + " right end\n</input>")).toBe(true);
     expect(h.opened[0]!.step).not.toMatch(/\d+\+\d+\|/);
     expect(h.stored.get("1:0")).toBe("user: summary");
     expect(h.reports).toEqual([]);
