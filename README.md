@@ -200,8 +200,8 @@ after the size attempts, a model node may retain its shortest oversized reply.
 
 Native OpenAI-compatible Chat Completions relies on the provider's implicit
 prefix caching. The system prompt and tool definitions stay byte-identical.
-The view is cut into four-line blocks: one cache mark sits on the last whole
-block, one on the request end after the new user text. The plan adapter sends
+The view is cut into four-line blocks: a mark sits at the last complete
+block, one at the request end after the new user text. The plan adapter sends
 one input block per view block and no explicit breakpoint field, because the
 ChatGPT plan route rejects that field (see [spec notes](docs/SPEC-NOTES.md)).
 No measured cache hit is claimed.

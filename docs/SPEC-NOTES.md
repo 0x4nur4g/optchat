@@ -54,7 +54,8 @@ Divergent:
   sends one input block per view block. Still divergent on the provider side:
   it sends no cache breakpoint, because the ChatGPT plan route rejects
   `prompt_cache_breakpoint` (HTTP 400; see "Cache and test evidence"). The
-  write-contention wait — a call whose marked prefix another call is writing —
+  write-contention wait — when one call is still writing a marked prefix and
+  another would write the same one —
   is deferred until parallel compactions share a marked prefix on the provider.
 
 ## Release boundary

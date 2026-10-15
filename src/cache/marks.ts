@@ -33,7 +33,7 @@ export function splitViewForCache(
   }
   if (pieces.length === 0) return { pieces: [rendered], marks: [end] };
   if (prev < rendered.length) pieces.push(rendered.slice(prev));
-  // One mark on the last whole block and one on the request end; a request
+  // One mark on the last complete block and one at the request end; a request
   // that ends exactly at a block end carries a single mark.
   return { pieces, marks: wholeEnd < end ? [wholeEnd, end] : [end] };
 }
