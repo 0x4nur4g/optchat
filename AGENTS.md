@@ -5,7 +5,8 @@ Project rules for agents working in this repo.
 1. Smallest sufficient change. Fewest files. No speculative generality.
 2. Never rewrite a whole file when a surgical edit works.
 3. NODE, VIEW, and stored sizes are UTF-8 bytes via Buffer.byteLength, never tokens.
-   CAP is 30000 characters; MARKS are character offsets. Preserve Unicode at cuts.
+   CAP is 30000 characters; cache marks are character offsets at four-line
+   view-block cuts plus the request end. Preserve Unicode at cuts.
 4. View rules: append at end, merge most-due pair only, never split.
    Parents enter view only when built. Never show cut text. Wait via settle.
 5. Compactor input adds no node IDs. Model output is one line only.

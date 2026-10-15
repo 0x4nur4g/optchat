@@ -76,7 +76,7 @@ export class OpenAICompat implements TurnAdapter, CompactionAdapter {
       {
         role: "user",
         content: [
-          ...splitViewForCache(req.view).pieces.filter(Boolean).map((text) => ({ type: "text", text })),
+          ...splitViewForCache(req.view, req.userText).pieces.filter(Boolean).map((text) => ({ type: "text", text })),
           { type: "text", text: req.userText },
         ],
       },

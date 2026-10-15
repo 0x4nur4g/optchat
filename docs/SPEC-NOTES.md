@@ -48,10 +48,15 @@ Adopted:
 
 Divergent:
 
-- #3 View marks are fixed `MARKS` offsets (50000/80000/100000), not
-  4-line blocks plus the request end. Open PR #26 implements only the
-  splitter; the Responses-adapter cache breakpoints and the request-end
-  mark are still unwired.
+- #3 Cache marks: the splitter cuts the view into four-line blocks, and the
+  request-end mark lands after the new user text, where the spec puts it
+  (`splitViewForCache(view, tail)` in `src/cache/marks.ts`). The plan adapter
+  sends one input block per view block. Still divergent on the provider side:
+  it sends no cache breakpoint, because the ChatGPT plan route rejects
+  `prompt_cache_breakpoint` (HTTP 400; see "Cache and test evidence"). The
+  write-contention wait — when one call is still writing a marked prefix and
+  another would write the same one —
+  is deferred until parallel compactions share a marked prefix on the provider.
 
 ## Release boundary
 
@@ -120,7 +125,7 @@ The reference distinguishes byte budgets from character limits. Existing
 | `VIEW = 128000` | UTF-8 bytes; view's stored-text budget |
 | Log/node `size` | UTF-8 bytes; measure with `Buffer.byteLength` |
 | `CAP = 30000` | Characters; kept tool-result text, including its cut note |
-| `MARKS = 50000, 80000, 100000` | Character offsets; view-piece boundaries |
+| Cache marks | Character offsets; four-line view-block boundaries plus the request end |
 
 Character offsets use JavaScript string indexing (UTF-16 code units), not token
 counts. Character cuts preserve surrogate pairs. Byte-limit feedback must end
@@ -212,11 +217,34 @@ separate case. Provider bodies are never echoed.
 
 ## Cache and test evidence
 
-This adapter uses native Chat Completions, not the reference's Responses API or
-Anthropic protocol. Compatible providers may apply implicit prefix caching.
-Stable system/tool prefixes, native in-turn history, and line-aligned view pieces
-support that layout. No explicit vendor cache-control or breakpoint flags are
-claimed for this adapter. The splitter alone does not prove a provider cache hit.
+Cache marks: the view is cut into four-line blocks, and two marks are computed
+in the message the adapter assembles from the view and its tail — the new user
+text (`splitViewForCache(view, tail)` in `src/cache/marks.ts`). One mark sits on
+the end of the last whole block; one on the request end, after the tail. A view
+with no whole block carries only the end mark. The `<chat>` header line opens
+the first block without counting as one of its four lines: counting it would
+shift every block boundary, and the reference is silent on it (deliberate
+decision, 2026-10-15).
+
+The plan adapter (`src/model/openai-responses.ts`) sends one `input_text` item
+per view block, then the new user text as the final item, so the block grid and
+the request end are content-block boundaries. It sends no explicit breakpoint
+field. That route is the subscription dialect of the Responses API, and
+`prompt_cache_breakpoint` there is reported as HTTP 400 "not supported on this
+model" (26 of 26 treatment requests, rolled back; tracking issue
+openai/codex#35300 still open 2026-10-06). The public Responses API does define
+`prompt_cache_breakpoint` on `input_text` blocks for GPT-5.6 and later, so the
+field is not an invention, but this route does not accept it and sending it
+would fail every plan request. On GPT-5.6 and later, implicit caching places its
+own breakpoint at the end of the latest eligible message — here the request end
+— with no field from this client.
+
+The Chat Completions adapter uses the native protocol, not the reference's
+Responses API or Anthropic protocol. Compatible providers may apply implicit
+prefix caching. Stable system/tool prefixes, native in-turn history, and
+four-line view blocks support that layout. No explicit vendor cache-control or
+breakpoint flag is claimed for either adapter. The splitter alone does not prove
+a provider cache hit.
 
 Integration tests use offline scripted-provider responses and recorded requests.
 They establish local request/history and memory behavior, not live-provider
