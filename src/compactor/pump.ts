@@ -220,17 +220,23 @@ export interface PumpOptions {
 // another attempt: the chat advances when a message is appended, or earlier
 // on input that will become one. Record the generation at dispatch, so chat
 // advancing during the call also unlocks a retry.
-export async function pumpOnce(opts: PumpOptions): Promise<number> {
-  if (opts.signal?.aborted) return 0;
-  const at = opts.epoch ?? opts.ready.T;
-  // A chat advance since a failure unlocks it: the node re-enters its queue.
-  // Each advance unlocks one more attempt; no timer ever runs.
+/**
+ * Unlock every node whose failure predates the chat's current advance: each
+ * re-enters its queue, one more attempt per advance; no timer ever runs.
+ */
+function requeueFailed(opts: PumpOptions, at: number): void {
   for (const [key, gen] of opts.failedAt) {
     if (gen >= at) continue;
     opts.failedAt.delete(key);
     const [l, i] = key.split(":").map(Number) as [number, number];
     requeue(opts.ready, l, i);
   }
+}
+
+export async function pumpOnce(opts: PumpOptions): Promise<number> {
+  if (opts.signal?.aborted) return 0;
+  const at = opts.epoch ?? opts.ready.T;
+  requeueFailed(opts, at);
   const free = JOBS - opts.busy.size;
   if (free <= 0) return 0;
   const picked: Candidate[] = [];
