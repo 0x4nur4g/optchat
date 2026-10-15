@@ -4,11 +4,12 @@ Reference: [OptChat specification, pinned revision](https://gist.githubuserconte
 This file records the core contract and release limits. It does not reproduce
 the reference's prompts. Repository prompts use original wording.
 
-## Spec parity (recorded 2026-10-14)
+## Spec parity (recorded 2026-10-15)
 
-Status against pinned revision `3c190e06`, verified in this tree at `0ec3b2f`.
-Adopted parts were confirmed in `src/` at recording time. Divergent parts each
-carry their tracking issue; all twelve are open and none is claimed fixed here.
+Status against pinned revision `3c190e06`, verified in this tree at `06f910d`.
+Adopted parts were confirmed in `src/` at recording time. Eleven of the twelve
+parity gaps landed on 2026-10-15 through the parity merge train (PRs #14 and
+#16-#25); the remaining one carries its tracking issue.
 
 Adopted:
 
@@ -16,38 +17,41 @@ Adopted:
   (`bestPair` in `src/view/fold.ts`), not from its first.
 - View merges are batched: the live view grows without merging and drops
   to `LOW` in one batch once past `VIEW` (`sawtooth` in `src/view/fold.ts`).
-- The view is persisted and resumed, never rebuilt from the log
-  (`src/view/persist.ts`).
+- The view is persisted and resumed, rebuilt only when the saved view cannot
+  be trusted (`src/view/persist.ts`).
 - One shared system prompt serves turns and compactions byte-identically
   (`TURN_SYSTEM = SHARED_SYSTEM` in `src/turn/loop.ts`), so compactions
   read the cached prefix the turns already wrote.
+- #1 Subagent reports are stored as a `work` kind with a `[Name] ` author
+  prefix; older `user`-kind reports stay readable.
+- #2 Long non-echo text is logged as several cap-bounded messages in a row
+  (`splitLogText` in `src/storage/log.ts`); the whole text still reaches
+  the model in one turn input.
+- #4 Compactions take their context from their own 16-32 KB view derived
+  from the built prefix (`src/view/compaction.ts`).
+- #5 The compactor's size ruler is 512 dashes, not a sample line.
+- #6 Compaction payloads are wrapped in `<input>` tags in both step builders.
+- #7 A leaf starts once fewer than 8 unbuilt view lines precede it
+  (`firstUnbuilt(..., 7)` in `src/compactor/pump.ts`).
+- #8 A merge starts once both its halves are built; its context is cut at
+  the first unbuilt line, never across a hole.
+- #9 Ready nodes are kept in queues; the tree is walked once per load, never
+  per pump (`ReadyQueues` in `src/compactor/pump.ts`).
+- #10 A failed compaction retries at the next message — arrival or append —
+  never on a timer (`failedAt` generations in `src/compactor/pump.ts`).
+- #11 `zoom(id, 1)` returns long messages in pages; the page selector is
+  this repo's own extension, since the reference defines no paging API
+  (see the pagination deviation note under "Turn state and native tools").
+- #12 The turn prompt carries both navigation rules: the view's newest
+  mention is the truth to zoom whole before anything else, and zoom is the
+  only way through memory, never a grep or file search.
 
 Divergent:
 
-- #1 Subagent reports are user messages starting `[id] `; there is no
-  stored `work` kind.
-- #2 Long non-tool text is logged as one message, not several.
 - #3 View marks are fixed `MARKS` offsets (50000/80000/100000), not
-  4-line blocks plus the request end.
-- #4 Compactions take their context from the view lines before the node,
-  not from their own 16-32 KB context view.
-- #5 The compactor's size ruler is a realistic sample line (`SCALE_LINE`),
-  not 512 dashes.
-- #6 Compaction payloads are wrapped in plain sentences, not input tags.
-- #7 Every node waits for the fully built frontier (`end <= firstUnbuilt`
-  in `src/compactor/pump.ts`); the spec lets a leaf start with up to 7
-  unbuilt lines before it.
-- #8 A merge also waits for that frontier; the spec starts a merge when
-  both its halves are built.
-- #9 The pump rescans the tree for buildable nodes instead of keeping
-  ready queues.
-- #10 A failed compaction retries on the fixed `RETRY_MS` timer, not at
-  the next message.
-- #11 `zoom(id, 1)` returns the stored message whole, capped by `CAP`.
-  The spec defines no paging API, so the paging design in #11 is a
-  deliberate deviation, not a parity gap.
-- #12 The turn system prompt carries one navigation rule; the spec
-  carries two.
+  4-line blocks plus the request end. Open PR #26 implements only the
+  splitter; the Responses-adapter cache breakpoints and the request-end
+  mark are still unwired.
 
 ## Release boundary
 
@@ -143,8 +147,9 @@ address, delimiter, or wrapper in the final request; allow provider context head
   nodes retry when the chat advances — an appended message, or queued input
   that will become one — never on a timer; report the first failure rather
   than repeating it.
-- Fold the view on load. During a run, append at the end and merge the most-due
-  eligible adjacent pair. Replace children only with a built parent. Never split
+- Fold the view on load. During a run, append at the end; once past `VIEW`,
+  merge the most-due eligible pairs in one batch down to `LOW`. Replace
+  children only with a built parent. Never split
   an already merged part or rebuild the live tiling on every summary completion.
 - A display placeholder is not model context. Model-backed turns wait via
   `settle`; they never receive a cut prefix of an unbuilt source.

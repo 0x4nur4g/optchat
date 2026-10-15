@@ -169,7 +169,8 @@ their original text, including newlines. Longer sources are summarized. The view
 flattens stored newlines and shows `id+n|text` rows. `zoom` opens a node's children
 or a stored message; tool results remain subject to `CAP`.
 
-The live view appends at the end and merges the most-due eligible pair. A built
+The live view appends at the end and, once past the view budget, merges the
+most-due eligible pairs in one batch. A built
 parent can replace its children; merged parts never split. Turns wait for summaries
 with `settle`, rather than receiving cut message text.
 
