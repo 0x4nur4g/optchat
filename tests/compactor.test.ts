@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { candidates, pumpOnce, nodeKey, type PumpOptions } from "../src/compactor/pump";
+import { candidates, initReady, nodeKey, pumpOnce, type PumpOptions } from "../src/compactor/pump";
 import { NODE, byteLen } from "../src/constants";
 
 function harness(messages: { kind: string; text: string }[]) {
@@ -8,10 +8,11 @@ function harness(messages: { kind: string; text: string }[]) {
   const opened: { context: string[]; step: string; system: string; signal?: AbortSignal }[] = [];
   const replies = ["user: summary"];
   const feedback: (string | undefined)[] = [];
+  const view = messages.map((_, i) => ({ l: 0, i, id: i, n: 1 }));
+  const isBuilt = (l: number, i: number) => stored.has(nodeKey(l, i));
   const opts: PumpOptions = {
-    T: messages.length,
-    view: messages.map((_, i) => ({ l: 0, i, id: i, n: 1 })),
-    isBuilt: (l, i) => stored.has(nodeKey(l, i)),
+    ready: initReady(view, isBuilt, messages.length),
+    isBuilt,
     busy: new Set(),
     reported: new Set(),
     adapter: {
@@ -30,7 +31,7 @@ function harness(messages: { kind: string; text: string }[]) {
     context: (l, i) => {
       const end = l === 0 ? i : (i + 1) * 2 ** l;
       const context: string[] = [];
-      for (const part of opts.view) {
+      for (const part of view) {
         if (part.id + part.n > end) break;
         const text = stored.get(nodeKey(part.l, part.i));
         if (text === undefined) break;
@@ -42,7 +43,9 @@ function harness(messages: { kind: string; text: string }[]) {
     report: (_l, _i, err) => { reports.push(err); },
     sleep: async () => {},
   };
-  return { opts, stored, reports, opened, replies, feedback };
+  /** Re-seed the ready queues, as a restart would after nodes were persisted. */
+  const reinit = () => { opts.ready = initReady(view, isBuilt, messages.length); };
+  return { opts, reinit, stored, reports, opened, replies, feedback };
 }
 
 describe("free nodes", () => {
@@ -79,6 +82,7 @@ describe("free nodes", () => {
     const h = harness([{ kind: "note", text: "" }, { kind: "note", text: "" }]);
     h.stored.set("0:0", "a".repeat(255));
     h.stored.set("0:1", "b".repeat(256));
+    h.reinit();
     await pumpOnce(h.opts);
     expect(h.stored.get("1:0")).toBe("a".repeat(255) + "\n" + "b".repeat(256));
     expect(h.opened).toEqual([]);
@@ -183,6 +187,7 @@ describe("build order and readiness", () => {
     h.stored.set("0:0", "user: prefix\nline");
     h.opts.busy.add("0:1");
     for (let i = 2; i < 6; i++) h.stored.set(nodeKey(0, i), "user: " + "x".repeat(300));
+    h.reinit(); // the queues must be seeded from the persisted nodes, as at load
     expect(await pumpOnce(h.opts)).toBe(2);
     expect(h.opened.map((call) => call.context)).toEqual([
       ["user: prefix line"], ["user: prefix line"],
@@ -200,6 +205,7 @@ describe("build order and readiness", () => {
     h.opts.busy.add("0:0");
     h.opts.busy.add("0:1");
     for (let i = 2; i < 22; i++) h.stored.set(nodeKey(0, i), "x".repeat(300));
+    h.reinit(); // the queues must be seeded from the persisted nodes, as at load
     const replies: ((text: string) => void)[] = [];
     h.opts.adapter = { openCompaction() {
       return { reply: () => new Promise<string>((resolve) => { replies.push(resolve); }) };
@@ -237,6 +243,7 @@ describe("build order and readiness", () => {
     const right = "echo: " + "文".repeat(100) + "\r\nright end";
     h.stored.set("0:0", left);
     h.stored.set("0:1", right);
+    h.reinit();
     await pumpOnce(h.opts);
     expect(h.opened.length).toBe(1);
     expect(h.opened[0]!.context).toEqual([
@@ -252,6 +259,7 @@ describe("build order and readiness", () => {
   test("ready merges never exceed eight running jobs across overlapping pumps", async () => {
     const h = harness(Array.from({ length: 20 }, () => ({ kind: "user", text: "" })));
     for (let i = 0; i < 20; i++) h.stored.set(nodeKey(0, i), "user: " + "x".repeat(500));
+    h.reinit();
     const replies: ((text: string) => void)[] = [];
     let started = 0;
     h.opts.adapter = { openCompaction() {
