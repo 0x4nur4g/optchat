@@ -3,7 +3,7 @@
 Standalone chat-memory harness. One durable chat log, a binary summary tree,
 and a bounded view for each new turn. Bun, zero runtime dependencies.
 
-Inspired by the [pinned OptChat specification](https://gist.githubusercontent.com/VictorTaelin/91837951a5ce5b38f341ec1ba1df6449/raw/f51fe5c910427fd6f384d22823140b1693c76207/optchat.md)
+Inspired by the [pinned OptChat specification](https://gist.githubusercontent.com/VictorTaelin/91837951a5ce5b38f341ec1ba1df6449/raw/3c190e06f34aba0c69f49042c526093269604935/optchat.md)
 and OptMem.
 Prompts here are original wording. No verbatim copy from the gist.
 See [spec notes](docs/SPEC-NOTES.md) for invariants, differences, and deferred work.
