@@ -77,7 +77,9 @@ address, delimiter, or wrapper in the final request; allow provider context head
   messages as data to summarize, not instructions to execute.
 - `NODE` is a target, not a hard storage bound. Apply size feedback and the bounded
   attempt loop, then retain the shortest candidate. Measure actual stored bytes.
-- Build only when sources and preceding summary context are ready. Failed nodes
+- A leaf builds when the built frontier reaches it. A merge starts once both
+  its halves are built. Compaction context ends at the first unbuilt line, so
+  it never contains a gap or placeholder. Failed nodes
   retry after the fixed delay; report the first failure rather than repeating it.
 - Fold the view on load. During a run, append at the end and merge the most-due
   eligible adjacent pair. Replace children only with a built parent. Never split

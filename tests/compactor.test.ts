@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { pumpOnce, nodeKey, type PumpOptions } from "../src/compactor/pump";
+import { candidates, pumpOnce, nodeKey, type PumpOptions } from "../src/compactor/pump";
 import { NODE, byteLen } from "../src/constants";
 
 function harness(messages: { kind: string; text: string }[]) {
@@ -26,13 +26,17 @@ function harness(messages: { kind: string; text: string }[]) {
     },
     message: (i) => messages[i]!,
     children: (l, i) => [stored.get(nodeKey(l - 1, 2 * i))!, stored.get(nodeKey(l - 1, 2 * i + 1))!],
+    // Lines up to the node's end, cut at the first unbuilt line (no hole is skipped).
     context: (l, i) => {
       const end = l === 0 ? i : (i + 1) * 2 ** l;
-      return opts.view.filter((part) => part.id + part.n <= end).map((part) => {
+      const context: string[] = [];
+      for (const part of opts.view) {
+        if (part.id + part.n > end) break;
         const text = stored.get(nodeKey(part.l, part.i));
-        if (text === undefined) throw new Error("unbuilt context");
-        return text;
-      });
+        if (text === undefined) break;
+        context.push(text);
+      }
+      return context;
     },
     save: async (l, i, text) => { stored.set(nodeKey(l, i), text); },
     report: (_l, _i, err) => { reports.push(err); },
@@ -139,6 +143,76 @@ describe("compaction sessions", () => {
 });
 
 describe("build order and readiness", () => {
+  test("stored children unlock every merge level across view holes in level/age order", () => {
+    // Leaves 2..15 and the merges above them (1:2..1:7, 2:2, 2:3) are built;
+    // every built subtree is complete. Lines 0 and 1 are the unbuilt hole, so
+    // first = 0 and only leaf 0:0 clears the frontier. 1:1, 2:1 and 3:1 have
+    // both halves stored, so every merge level is ready across the hole; 4:0
+    // still waits for its unbuilt left half 3:0.
+    const built = new Set<string>();
+    for (let i = 2; i < 16; i++) built.add(nodeKey(0, i));
+    for (let i = 2; i < 8; i++) built.add(nodeKey(1, i));
+    built.add(nodeKey(2, 2));
+    built.add(nodeKey(2, 3));
+    const isBuilt = (l: number, i: number) => built.has(nodeKey(l, i));
+    expect(candidates(16, isBuilt, new Set(), 0)).toEqual([
+      { l: 0, i: 0, end: 0 },
+      { l: 1, i: 1, end: 4 },
+      { l: 2, i: 1, end: 8 },
+      { l: 3, i: 1, end: 16 },
+    ]);
+    expect(candidates(16, isBuilt, new Set(["0:0", "1:1"]), 0)).toEqual([
+      { l: 2, i: 1, end: 8 }, { l: 3, i: 1, end: 16 },
+    ]);
+  });
+
+  test("missing or merely busy children never unlock a merge and ranges stay within T", () => {
+    const built = new Set(["0:2", "0:3", "0:4", "0:5", "1:2"]);
+    const isBuilt = (l: number, i: number) => built.has(nodeKey(l, i));
+    expect(candidates(5, isBuilt, new Set(["0:0", "0:1", "1:3"]), 0)).toEqual([
+      { l: 1, i: 1, end: 4 },
+    ]);
+    expect(candidates(0, isBuilt, new Set(), 0)).toEqual([]);
+    expect(candidates(1, isBuilt, new Set(), 0)).toEqual([{ l: 0, i: 0, end: 0 }]);
+    built.delete("0:3");
+    expect(candidates(5, isBuilt, new Set(["0:0", "0:3"]), 0)).toEqual([]);
+  });
+
+  test("pump merges across an earlier busy hole with only the built context prefix", async () => {
+    const h = harness(Array.from({ length: 6 }, () => ({ kind: "user", text: "" })));
+    h.stored.set("0:0", "user: prefix\nline");
+    h.opts.busy.add("0:1");
+    for (let i = 2; i < 6; i++) h.stored.set(nodeKey(0, i), "user: " + "x".repeat(300));
+    expect(await pumpOnce(h.opts)).toBe(2);
+    expect(h.opened.map((call) => call.context)).toEqual([
+      ["user: prefix line"], ["user: prefix line"],
+    ]);
+    expect(h.stored.get("1:1")).toBe("user: summary");
+    expect(h.stored.get("1:2")).toBe("user: summary");
+    expect(h.stored.has("0:1")).toBe(false);
+    expect(h.stored.has("1:0")).toBe(false);
+    expect([...h.opts.busy]).toEqual(["0:1"]);
+    expect(h.reports).toEqual([]);
+  });
+
+  test("hole-crossing merges reserve remaining JOBS slots before overlapping pumps", async () => {
+    const h = harness(Array.from({ length: 22 }, () => ({ kind: "user", text: "" })));
+    h.opts.busy.add("0:0");
+    h.opts.busy.add("0:1");
+    for (let i = 2; i < 22; i++) h.stored.set(nodeKey(0, i), "x".repeat(300));
+    const replies: ((text: string) => void)[] = [];
+    h.opts.adapter = { openCompaction() {
+      return { reply: () => new Promise<string>((resolve) => { replies.push(resolve); }) };
+    } };
+    const running = pumpOnce(h.opts);
+    expect([...h.opts.busy]).toEqual(["0:0", "0:1", "1:1", "1:2", "1:3", "1:4", "1:5", "1:6"]);
+    expect(replies.length).toBe(6);
+    expect(await pumpOnce(h.opts)).toBe(0);
+    for (const reply of replies) reply("merged");
+    expect(await running).toBe(6);
+    expect([...h.opts.busy]).toEqual(["0:0", "0:1"]);
+    expect(h.reports).toEqual([]);
+  });
   test("leaves build sequentially with only complete preceding summary context", async () => {
     const h = harness([
       { kind: "user", text: "first\n" + "a".repeat(600) },
