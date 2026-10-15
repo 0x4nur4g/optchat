@@ -2,6 +2,21 @@ import { describe, expect, test } from "bun:test";
 import { zoom, type ZoomStore } from "../src/tools/zoom";
 import { dateOf, lookup } from "../src/tools/date";
 import { formatAddress, nodeKey } from "../src/tree/address";
+import { CAP } from "../src/constants";
+import { capToolResult } from "../src/compactor/prompts";
+
+/** True when text holds no lone surrogate halves. */
+function wellFormed(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      i++;
+    } else if (code >= 0xdc00 && code <= 0xdfff) return false;
+  }
+  return true;
+}
 
 const store: ZoomStore = {
   getMessage: () => "user: original\nwhole text",
@@ -9,6 +24,46 @@ const store: ZoomStore = {
 };
 
 describe("zoom", () => {
+  test("pages are bounded, surrogate-safe, contiguous and losslessly reconstructable", () => {
+    for (const msg of ["a".repeat(CAP - 4), "a".repeat(CAP - 3),
+      "a".repeat(CAP - 101) + "😀" + "中\n😀".repeat(20000)]) {
+      const source: ZoomStore = { ...store, getMessage: () => msg };
+      const first = zoom(source, 0, 1, 1);
+      expect(first.length).toBeLessThanOrEqual(CAP);
+      expect(capToolResult(first)).toBe(first);
+      if (!first.startsWith("0+0|page ")) {
+        expect(first).toBe(`0+0|${msg}`);
+        continue;
+      }
+      const count = Number(first.match(/page 1\/(\d+)/)![1]);
+      let restored = "";
+      for (let page = 1; page <= count; page++) {
+        const result = zoom(source, 0, 1, 1, page);
+        expect(result.length).toBeLessThanOrEqual(CAP);
+        expect(capToolResult(result)).toBe(result);
+        const [header, ...body] = result.split("\n");
+        const offsets = header!.match(/chars (\d+):(\d+)$/)!;
+        expect(Number(offsets[1])).toBe(restored.length);
+        const payload = body.join("\n");
+        expect(wellFormed(payload)).toBe(true);
+        restored += payload;
+        expect(Number(offsets[2])).toBe(restored.length);
+      }
+      expect(restored).toBe(msg);
+      expect(zoom(source, 0, 1, 1, count + 1)).toStartWith("No page:");
+    }
+    expect(zoom(store, 8, 1, 16, 1)).toBe(zoom(store, 8, 1, 16));
+    expect(zoom(store, 8, 1, 16, 2)).toStartWith("No page:");
+  });
+
+  test.each([0, -1, 1.5, NaN, Infinity, 2 ** 53, "1", null, true])("rejects invalid page %s before reading", (page) => {
+    const unread: ZoomStore = {
+      getMessage: () => { throw new Error("must not read"); },
+      getNodeChildren: () => { throw new Error("must not read"); },
+    };
+    expect(zoom(unread, 0, 1, 1, page)).toStartWith("Invalid page:");
+    expect(zoom(unread, 0, 2, 2, 1)).toStartWith("Invalid page:");
+  });
   test("names the two children by their actual ranges", () => {
     expect(zoom(store, 8, 8, 16)).toBe("8+4|left\n12+4|right");
   });

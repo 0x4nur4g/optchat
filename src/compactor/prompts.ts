@@ -108,7 +108,10 @@ shows as "(not summarized yet: zoom it)". No message ever appears whole,
 not even the most recent.
 
 Navigating: zoom(id, n) takes line id+n apart into the two lines beneath
-it, each covering n/2 messages; zoom(id, 1) returns message id in full.
+it, each covering n/2 messages; zoom(id, 1) returns message id, with long
+messages paginated. Use zoom(id, 1, page) for a 1-based page (default 1,
+valid only for n=1). Long results label page/count and UTF-16 char offsets;
+join payloads after each metadata newline to recover the full original.
 Whenever a line only hints at something you need - what your last reply
 said, a decision, an earlier attempt, where a file lives - zoom it before
 you act, guess or ask. date(id) returns the date and time of message id.`;

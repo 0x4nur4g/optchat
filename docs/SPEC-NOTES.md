@@ -43,8 +43,17 @@ Older reports stored as `user` messages remain readable without migration.
 - Provider responses are buffered with `stream: false`. Entries become available
   after completed responses or tool calls; the CLI does not stream tokens.
 - `zoom(id, n)` navigates an aligned binary range. At `n = 1`, it reads the stored
-  message. `date(id)` reads that message's stored timestamp. Tool-result capping
-  applies even when the source message is larger than the result limit.
+  message. `date(id)` reads that message's stored timestamp.
+- Pagination deviation: `zoom(id, 1, page?)` uses optional 1-based pages,
+  defaulting to page 1. Short results retain their exact legacy format. Long
+  results use `id+0|page p/count chars start:end` followed by a newline and
+  verbatim payload, including the stored kind prefix. Offsets are UTF-16 units
+  in that payload source. Join payloads in page order for lossless reconstruction.
+  Fixed payload budgets reserve 100 characters for metadata and preserve
+  surrogate pairs. The entire result stays within CAP, so adapter head-tail
+  capping is a no-op. Pages on ranges, noninteger/nonpositive pages, and pages
+  beyond the message are refused. This extends the reference's two-argument
+  tool rather than allowing its raw-message result to be irretrievably capped.
 
 ## Units and Unicode
 

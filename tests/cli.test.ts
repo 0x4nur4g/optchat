@@ -7,6 +7,9 @@ import { dayFile, loadAll, openLog } from "../src/storage/log";
 import { saveNode } from "../src/storage/tree-store";
 import { NODE } from "../src/constants";
 import { TURN_SYSTEM } from "../src/turn/loop";
+import { CAP } from "../src/constants";
+import { memoryTools } from "../src/mcp/tools";
+import { TOOL_DEFINITIONS } from "../src/tools/definitions";
 
 const cli = path.resolve(import.meta.dir, "../src/cli.ts");
 const fixtures: string[] = [];
@@ -319,6 +322,43 @@ describe("CLI startup", () => {
 });
 
 describe("offline native CLI", () => {
+  test("native adapter and MCP return complete identical raw-message pages", async () => {
+    const dir = await fixture();
+    const text = "a".repeat(CAP - 107) + "😀" + "中\n😀".repeat(10000);
+    const log = await openLog(dir, "global");
+    // Echo is the one kind never split into several messages, so the whole
+    // text stays one message and pages as one.
+    await log.append("echo", text);
+    const mcp = memoryTools(dir, "global").find((tool) => tool.name === "zoom")!;
+    expect(mcp.inputSchema).toEqual(TOOL_DEFINITIONS[0]!.parameters);
+    expect((mcp.inputSchema.properties as Record<string, unknown>).page).toBeDefined();
+    expect(mcp.inputSchema.required).toEqual(["id", "n"]);
+    const first = await mcp.run({ id: 0, n: 1 });
+    const count = Number(first.match(/page 1\/(\d+)/)![1]);
+    const expected = await Promise.all(Array.from({ length: count }, (_, i) => mcp.run({ id: 0, n: 1, page: i + 1 })));
+    expect(expected.map((result) => result.slice(result.indexOf("\n") + 1)).join("")).toBe(`echo: ${text}`);
+    for (const page of [0, 1.5, "1", null, count + 1]) {
+      expect(await mcp.run({ id: 0, n: 1, page })).toMatch(/^(Invalid page:|No page:)/);
+    }
+    expect(await mcp.run({ id: 0, n: 2, page: 1 })).toStartWith("Invalid page:");
+    const seen: NativeRequest[] = [];
+    const env = provider((body) => {
+      if (isCompaction(body)) return reply({ content: "user: long fixture" });
+      seen.push(body);
+      if (seen.length === 1) return reply({ content: "", tool_calls: expected.map((_, i) => ({
+        id: `page-${i}`, type: "function", function: { name: "zoom", arguments: JSON.stringify({ id: 0, n: 1, page: i + 1 }) },
+      })) });
+      return reply({ content: "done" });
+    });
+    const child = start(dir, [], env);
+    child.stdin.write("read pages\n");
+    child.stdin.end();
+    const output = await result(child);
+    expect(output.code).toBe(0);
+    const returned = seen[1]!.messages.filter((message) => message.role === "tool").map((message) => message.content);
+    expect(returned).toEqual(expected);
+    for (const page of expected) expect(page.length).toBeLessThanOrEqual(CAP);
+  });
   test("retains tool history, accepts boundary input, starts fresh, and loads instructions once", async () => {
     const dir = await fixture();
     const instructions = path.join(dir, "instructions.md");
