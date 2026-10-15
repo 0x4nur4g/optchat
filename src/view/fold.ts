@@ -42,9 +42,9 @@ export function appendAndFit(view: Part[], T: number, sizes: SizeOf, isBuilt: Is
  * Nothing merges while growing, even when a parent has just become
  * buildable: a merge rewrites the view from that point onward.
  */
-export function sawtooth(view: Part[], T: number, sizes: SizeOf, isBuilt: IsBuilt): Part[] {
+export function sawtooth(view: Part[], T: number, sizes: SizeOf, isBuilt: IsBuilt, high = VIEW, low = LOW): Part[] {
   const parts = view.slice();
-  return sumBytes(parts, sizes) > VIEW ? fit(parts, T, sizes, isBuilt, LOW) : parts;
+  return sumBytes(parts, sizes) > high ? fit(parts, T, sizes, isBuilt, low) : parts;
 }
 
 /**
