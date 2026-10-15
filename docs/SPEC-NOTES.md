@@ -22,8 +22,9 @@ operation while users disconnect and attach again.
 Product subagents, computer use, external session bridges, a semantic index,
 and history-import/browser commands are deferred. Source helpers for importing
 text and rendering HTML do not mean those commands are wired into the CLI.
-References to subagent reports in prompts describe a possible future log kind
-convention, not an available `spawn` or `tell` tool.
+Reports can be captured with the stored `work` kind and a `[Name] ` author
+prefix. This does not provide an available `spawn` or `tell` tool, or named zoom.
+Older reports stored as `user` messages remain readable without migration.
 
 ## Turn state and native tools
 
@@ -35,7 +36,7 @@ convention, not an available `spawn` or `tell` tool.
   calls and their IDs, matching tool-role results, and input accepted at tool
   boundaries. Do not replace earlier messages with the latest tool result.
 - Retain provider reasoning fields in active assistant messages when returned.
-  The permanent log records `user`, `talk`, `tool`, `echo`, and `note`, not reasoning.
+  The permanent log records `user`, `talk`, `tool`, `echo`, `note`, and `work`, not reasoning.
 - Keep system text and tool definitions byte-identical across requests. An
   optional instructions file is read once at startup, not once per tool round.
   The default is `<dir>/instructions.md` when present; `--instructions` overrides it.

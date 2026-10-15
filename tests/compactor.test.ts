@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { candidates, initReady, nodeKey, pumpOnce, type PumpOptions } from "../src/compactor/pump";
 import { NODE, byteLen } from "../src/constants";
+import { COMPACT_SYSTEM, MASTER_SYSTEM, VIEW_DOC } from "../src/compactor/prompts";
 
 function harness(messages: { kind: string; text: string }[]) {
   const stored = new Map<string, string>();
@@ -90,6 +91,20 @@ describe("free nodes", () => {
 });
 
 describe("compaction sessions", () => {
+  test("long work reports reach compression with their stored kind and named author", async () => {
+    const text = "[Scout] findings\n" + "原".repeat(600);
+    const h = harness([{ kind: "work", text }]);
+    h.replies.splice(0, 1, "work: [Scout] mapped storage");
+    await pumpOnce(h.opts);
+    expect(h.opened[0]!.step.endsWith(`<input>\nwork: ${text}\n</input>`)).toBe(true);
+    expect(h.stored.get("0:0")).toBe("work: [Scout] mapped storage");
+    expect(COMPACT_SYSTEM).toContain('work (a subagent');
+    expect(COMPACT_SYSTEM).toContain('"[Name] "');
+    expect(MASTER_SYSTEM).toContain('work messages beginning "[Name] "');
+    expect(VIEW_DOC).toContain('work (a subagent');
+    expect(h.reports).toEqual([]);
+  });
+
   test("five replies share one session and retain the shortest over-target candidate", async () => {
     const source = "原".repeat(600) + "\nkeep this final line 😀";
     const h = harness([{ kind: "user", text: source }]);

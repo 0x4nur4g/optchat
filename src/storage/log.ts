@@ -7,7 +7,7 @@ import {
 } from "../constants";
 import { appendRecord, dayName, readRecords, validateScope } from "./jsonl";
 
-const KINDS: readonly string[] = ["user", "talk", "tool", "echo", "note"];
+const KINDS: readonly string[] = ["user", "talk", "tool", "echo", "note", "work"];
 
 function isMessage(value: unknown): value is LogMessage {
   if (value === null || typeof value !== "object") return false;
