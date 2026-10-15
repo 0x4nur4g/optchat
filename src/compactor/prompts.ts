@@ -130,24 +130,33 @@ const SCALE_RULER: string = "-".repeat(NODE);
 const SCALE_BLOCK: string = `One line of summary runs to ${NODE} bytes at most, roughly 70 words; this ruler is that wide:
 ${SCALE_RULER}`;
 
-// Step for a level-0 node: the message whole, newlines kept, with its kind.
-// `kind` is the bare kind ("user", "tool", ...); the ": " is added here.
+// Step for a level-0 node: the message whole, newlines kept, with its kind,
+// wrapped in <input> as COMPACT_SYSTEM describes. `kind` is the bare kind
+// ("user", "tool", ...); the ": " is added here.
 export function buildCompressStep(kind: string, text: string): string {
   return `${SCALE_BLOCK}
 
 Summarize this message as one line, at most ${NODE} bytes; keep it whole, newlines included:
-${kind}: ${text}`;
+<input>
+${kind}: ${text}
+</input>`;
 }
 
-// Step for a merge: the two child lines, already single lines (newlines are
-// flattened to spaces here), no ids.
+// Step for a merge: the two child lines inside <input>, already single lines
+// (newlines are flattened to spaces here). The hint names the stretch they
+// cover the way the spec's range advice does, but without any ids.
 export function buildMergeStep(a: string, b: string): string {
   const flatten = (s: string): string => s.replace(/\r\n?|\n/g, " ");
   return `${SCALE_BLOCK}
 
-Merge these two neighboring lines into a single line, at most ${NODE} bytes:
+Merge these two neighboring lines into a single line, at most ${NODE} bytes.
+Together they cover one stretch of messages, the first line its older half
+and the second its newer; <chat> may hold that same stretch in finer detail,
+so take extra detail from there when the lines leave something coarse:
+<input>
 ${flatten(a)}
-${flatten(b)}`;
+${flatten(b)}
+</input>`;
 }
 
 const cutNote = (n: number): string => `\n[... ${n} characters cut ...]\n`;
