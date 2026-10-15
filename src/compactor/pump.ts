@@ -19,10 +19,14 @@ export interface Candidate {
   end: number;
 }
 
-// First message whose view line is unbuilt; T (total messages) when every
-// line is built. The view tiles [0, T) oldest first, so T = last.id + last.n.
-export function firstUnbuilt(view: Part[], isBuilt: IsBuilt): number {
-  for (const part of view) if (!isBuilt(part.l, part.i)) return part.id;
+// First message whose view line is unbuilt once `allowance` unbuilt lines
+// are tolerated (default 0: the first unbuilt line); T (total messages)
+// when fewer unbuilt lines remain. The view tiles [0, T) oldest first,
+// so T = last.id + last.n.
+export function firstUnbuilt(view: Part[], isBuilt: IsBuilt, allowance = 0): number {
+  for (const part of view) {
+    if (!isBuilt(part.l, part.i) && allowance-- === 0) return part.id;
+  }
   if (view.length === 0) return 0;
   const last = view[view.length - 1];
   return last.id + last.n;
@@ -31,15 +35,16 @@ export function firstUnbuilt(view: Part[], isBuilt: IsBuilt): number {
 // Buildable nodes, in the reference order (leaves oldest first, then each
 // merge level):
 //   not built, not busy, sources ready (level 0: the message exists;
-//   level > 0: both children built). Only leaves are restricted to the
-//   first unbuilt view line; merges may build across earlier view holes.
+//   level > 0: both children built). A leaf only needs end <= leafFirst: up
+//   to 7 unbuilt view lines may precede its message; a merge may build
+//   across earlier view holes.
 // `end` is i for level 0 (its message) and (i+1)*2^l for a merge (exclusive).
-// The caller passes first = firstUnbuilt(...); the default T means "no
-// frontier" and returns every buildable node.
+// The caller passes leafFirst = firstUnbuilt(..., 7); the default T means
+// "no frontier" and returns every buildable node.
 // This runs exactly once per load, in initReady, to seed the ready queues.
 // The pump itself pops those queues, so it never enumerates levels or
 // indices on each pump; the per-pump scan was the spec's O(N^2) mistake.
-export function candidates(T: number, isBuilt: IsBuilt, busy: Set<string>, first: number = T): Candidate[] {
+export function candidates(T: number, isBuilt: IsBuilt, busy: Set<string>, leafFirst: number = T): Candidate[] {
   const out: Candidate[] = [];
   for (let l = 0; 2 ** l <= T; l++) {
     const span = 2 ** l;
@@ -47,7 +52,7 @@ export function candidates(T: number, isBuilt: IsBuilt, busy: Set<string>, first
       if (isBuilt(l, i) || busy.has(nodeKey(l, i))) continue;
       if (l > 0 && !(isBuilt(l - 1, 2 * i) && isBuilt(l - 1, 2 * i + 1))) continue;
       const end = l === 0 ? i : (i + 1) * span;
-      if (l === 0 && end > first) continue;
+      if (l === 0 && end > leafFirst) continue;
       out.push({ l, i, end });
     }
   }
@@ -56,8 +61,8 @@ export function candidates(T: number, isBuilt: IsBuilt, busy: Set<string>, first
 
 // --- ready queues ------------------------------------------------------------
 // The spec's scheduler: keep the nodes that are ready to build in queues and
-// never scan the tree for work. A leaf enters when its message arrives and
-// the frontier already reaches it (every view line before it built); a merge
+// never scan the tree for work. A leaf enters when its message arrives with
+// fewer than 8 unbuilt view lines before it; a merge
 // enters when its second child is saved; a failed node re-enters when the
 // chat advances past its failed attempt, never on a timer. A merge's
 // frontier rule holds by
@@ -124,32 +129,35 @@ function mergeQueue(ready: ReadyQueues, l: number): Queue {
 export function initReady(view: Part[], isBuilt: IsBuilt, T: number): ReadyQueues {
   const first = firstUnbuilt(view, isBuilt);
   const ready: ReadyQueues = { T, nextLeaf: first, leaves: queue(), parents: [] };
-  for (const c of candidates(T, isBuilt, new Set(), first)) {
+  // A leaf may start with up to 7 unbuilt view lines before it.
+  for (const c of candidates(T, isBuilt, new Set(), firstUnbuilt(view, isBuilt, 7))) {
     push(c.l === 0 ? ready.leaves : mergeQueue(ready, c.l), c.i);
   }
   return ready;
 }
 
 /**
- * Message i arrived. Its leaf is ready only under the frontier rule, which
- * for the newest message means the frontier is parked exactly at it; a later
- * message whose predecessor is still unbuilt enters through saved() instead.
+ * Message i arrived. Its leaf is ready once fewer than 8 unbuilt view lines
+ * precede it; a message arriving behind a larger gap enters through the
+ * window pushes in saved() once enough of them build.
  */
 export function arrive(ready: ReadyQueues, i: number): void {
   ready.T = Math.max(ready.T, i + 1);
-  if (ready.nextLeaf === i) push(ready.leaves, i);
+  if (i - ready.nextLeaf < 8) push(ready.leaves, i);
 }
 
 /**
  * A node's save just completed, so isBuilt(l, i) is now true. A saved leaf
- * moves the frontier past every already-built leaf; any save makes the
+ * moves the frontier past every already-built leaf and re-offers the
+ * arrived leaves now inside the 7-unbuilt-line window; any save makes the
  * parent whose second half it completed ready.
  */
-export function saved(ready: ReadyQueues, isBuilt: IsBuilt, l: number, i: number): void {
+export function saved(ready: ReadyQueues, isBuilt: IsBuilt, busy: Set<string>, l: number, i: number): void {
   if (l === 0) {
-    ready.nextLeaf = Math.max(ready.nextLeaf, i + 1);
     while (ready.nextLeaf < ready.T && isBuilt(0, ready.nextLeaf)) ready.nextLeaf++;
-    if (ready.nextLeaf < ready.T) push(ready.leaves, ready.nextLeaf);
+    for (let j = ready.nextLeaf; j < ready.T && j - ready.nextLeaf < 8; j++) {
+      if (!isBuilt(0, j) && !busy.has(nodeKey(0, j))) push(ready.leaves, j);
+    }
   }
   const parent = i >> 1;
   if (isBuilt(l, i ^ 1) && !isBuilt(l + 1, parent)) push(mergeQueue(ready, l + 1), parent);
@@ -229,6 +237,8 @@ export async function pumpOnce(opts: PumpOptions): Promise<number> {
   while (picked.length < free) {
     const c = popReady(opts.ready, opts.isBuilt, opts.busy);
     if (c === undefined) break;
+    // A node that already failed this epoch waits for a chat advance.
+    if ((opts.failedAt.get(nodeKey(c.l, c.i)) ?? -1) >= at) continue;
     opts.busy.add(nodeKey(c.l, c.i));
     picked.push(c);
   }
@@ -281,7 +291,7 @@ async function runNode(opts: PumpOptions, c: Candidate, at: number): Promise<voi
     saving = true;
     // Never race a durable save against cancellation; shutdown must await it.
     await opts.save(c.l, c.i, accepted);
-    saved(opts.ready, opts.isBuilt, c.l, c.i); // frontier + parent readiness
+    saved(opts.ready, opts.isBuilt, opts.busy, c.l, c.i); // frontier + parent readiness
     opts.failedAt.delete(key);
     opts.reported.delete(key); // a later failure is reported again
   } catch (err) {

@@ -137,9 +137,9 @@ address, delimiter, or wrapper in the final request; allow provider context head
   messages as data to summarize, not instructions to execute.
 - `NODE` is a target, not a hard storage bound. Apply size feedback and the bounded
   attempt loop, then retain the shortest candidate. Measure actual stored bytes.
-- A leaf builds when the built frontier reaches it. A merge starts once both
-  its halves are built. Compaction context ends at the first unbuilt line, so
-  it never contains a gap or placeholder. Failed
+- A leaf builds once fewer than 8 unbuilt view lines precede it. A merge
+  starts once both its halves are built. Compaction context ends at the
+  first unbuilt line, so it never contains a gap or placeholder. Failed
   nodes retry when the chat advances — an appended message, or queued input
   that will become one — never on a timer; report the first failure rather
   than repeating it.

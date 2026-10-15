@@ -49,7 +49,7 @@ function stubs(
 }
 
 describe("ready queues", () => {
-  test("a leaf enters the queue on arrival, behind the frontier rule", async () => {
+  test("a leaf enters the queue on arrival, within the 7-line allowance", async () => {
     const stored = new Map<string, string>();
     const isBuilt = (l: number, i: number) => stored.has(nodeKey(l, i));
     const messages: { kind: string; text: string }[] = [];
@@ -59,16 +59,15 @@ describe("ready queues", () => {
     arrive(ready, 0);
     expect(queued(ready.leaves)).toEqual([0]); // first message: nothing before it
     messages.push({ kind: "user", text: "m0" });
-    arrive(ready, 1);
-    expect(queued(ready.leaves)).toEqual([0]); // leaf 0 is unbuilt: leaf 1 is not ready
-    expect(await pumpOnce(opts)).toBe(1);
-    expect(savedNodes).toEqual(["0:0"]);
-    expect(queued(ready.leaves)).toEqual([1]); // the frontier moved to leaf 1
     messages.push({ kind: "user", text: "m1" });
-    expect(await pumpOnce(opts)).toBe(1);
+    arrive(ready, 1);
+    expect(queued(ready.leaves)).toEqual([0, 1]); // one unbuilt line before it: within the allowance
+    expect(await pumpOnce(opts)).toBe(2); // both leaves build together
     expect(savedNodes).toEqual(["0:0", "0:1"]);
     expect(queued(ready.leaves)).toEqual([]); // parked past the last message
-    expect(queued(ready.parents[1])).toEqual([0]); // the first merge became ready
+    // Both same-pump children announced (1,0); the duplicate is dropped at
+    // the next pop, when it is already built.
+    expect([...new Set(queued(ready.parents[1]))]).toEqual([0]); // the first merge became ready
     expect(await pumpOnce(opts)).toBe(1);
     expect(savedNodes).toEqual(["0:0", "0:1", "1:0"]);
     expect(opts.busy.size).toBe(0);
@@ -76,29 +75,27 @@ describe("ready queues", () => {
 
   test("a merge enters its queue when its second child is built", async () => {
     // 4 messages; leaves 0-1 are built, so their merge is ready at load; the
-    // later leaves arrive through the frontier, one at a time.
+    // later leaves enter together within the allowance.
     const stored = new Map<string, string>([["0:0", "a"], ["0:1", "b"]]);
     const isBuilt = (l: number, i: number) => stored.has(nodeKey(l, i));
     const messages = Array.from({ length: 4 }, () => ({ kind: "note", text: "" }));
     const view = [0, 1, 2, 3].map((i) => ({ l: 0, i, id: i, n: 1 }));
     const ready = initReady(view, isBuilt, 4);
-    expect(queued(ready.leaves)).toEqual([2]); // frontier leaf
+    expect(queued(ready.leaves)).toEqual([2, 3]); // both within the leaf window
     expect(queued(ready.parents[1])).toEqual([0]); // leaves 0-1 finished before the load
     const { opts, savedNodes } = stubs(ready, stored, isBuilt, messages);
-    expect(await pumpOnce(opts)).toBe(2); // leaf first, then the ready merge
-    expect(savedNodes).toEqual(["0:2", "1:0"]);
-    expect(queued(ready.leaves)).toEqual([3]); // frontier moved
-    expect(queued(ready.parents[1])).toEqual([]); // (1,1) still misses leaf 3
-    expect(await pumpOnce(opts)).toBe(1); // leaf 3 is the second half of (1,1)
-    expect(savedNodes).toEqual(["0:2", "1:0", "0:3"]);
+    expect(await pumpOnce(opts)).toBe(3); // the two leaves, then the ready merge
+    expect(savedNodes).toEqual(["0:2", "0:3", "1:0"]);
     expect(queued(ready.leaves)).toEqual([]); // parked at the end
     expect(ready.nextLeaf).toBe(4);
-    expect(queued(ready.parents[1])).toEqual([1]); // now the merge enters
+    // Both children of the same-pump pair announced (1,1); the duplicate
+    // entry is dropped at the next pop, when it is already built.
+    expect([...new Set(queued(ready.parents[1]))]).toEqual([1]); // leaf 3 was (1,1)'s second half
     expect(await pumpOnce(opts)).toBe(1);
-    expect(savedNodes).toEqual(["0:2", "1:0", "0:3", "1:1"]);
+    expect(savedNodes).toEqual(["0:2", "0:3", "1:0", "1:1"]);
     expect(queued(ready.parents[2])).toEqual([0]); // its save completed the root's halves
     expect(await pumpOnce(opts)).toBe(1);
-    expect(savedNodes).toEqual(["0:2", "1:0", "0:3", "1:1", "2:0"]);
+    expect(savedNodes).toEqual(["0:2", "0:3", "1:0", "1:1", "2:0"]);
     expect(stored.get("2:0")).toBe("a\nb\nnote: \nnote: ");
     expect(opts.busy.size).toBe(0);
   });
