@@ -17,7 +17,7 @@ export async function capture(
   scope: string,
   kind: Kind,
   text: string,
-): Promise<LogMessage> {
+): Promise<LogMessage[]> {
   if (typeof text !== "string" || text.length === 0) {
     throw new Error("optchat: capture needs non-empty text");
   }

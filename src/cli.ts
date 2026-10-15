@@ -130,8 +130,8 @@ if (process.argv.includes("--capture")) {
     text = Buffer.concat(chunks).toString("utf8");
   }
   try {
-    const message = await capture(dir, scope, kind, text);
-    console.log(message.i);
+    const added = await capture(dir, scope, kind, text);
+    for (const message of added) console.log(message.i);
     process.exit(0);
   } catch (err) {
     console.error(`optchat: ${errText(err)}`);
@@ -497,8 +497,8 @@ async function log(kind: Kind, text: string): Promise<void> {
   if (writer.nextId !== expected) {
     throw new Error("chat log ID gap: restore missing records before appending input");
   }
-  const message = await writer.append(kind, text);
-  if (message.i !== expected) {
+  const added = await writer.append(kind, text);
+  if (added.some((message, index) => message.i !== expected + index)) {
     // Never let an unexpected durable ID enter the contiguous view.
     // Acknowledge this persisted input once, then stop all model work.
     console.log(`${kind}: ${text}`);
@@ -511,7 +511,9 @@ async function log(kind: Kind, text: string): Promise<void> {
     closeInput();
     return;
   }
-  view = appendAndFit(view, messages.length, sizeOf, isBuilt);
+  for (const message of added) {
+    view = appendAndFit(view, message.i + 1, sizeOf, isBuilt);
+  }
   await saveView(dir, scope, view);
   wakePump();
   console.log(`${kind}: ${text}`);

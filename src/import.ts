@@ -1,4 +1,5 @@
 import { messageSize } from "./constants";
+import { splitLogText } from "./storage/log";
 
 /**
  * Import helpers: turn pasted history into log lines. Storage assigns the
@@ -13,8 +14,10 @@ export interface ImportedNote {
   date: string;
 }
 
-export function toNote(text: string, date: string): ImportedNote {
-  return { kind: "note", text, size: messageSize("note", text), date };
+export function toNote(text: string, date: string): ImportedNote[] {
+  return splitLogText(text).map((part) => ({
+    kind: "note", text: part, size: messageSize("note", part), date,
+  }));
 }
 
 const TOOL_NOISE: RegExp[] = [/^\s*tool:/i, /^\s*\[tool\]/i, /^\s*assistant to=/i];

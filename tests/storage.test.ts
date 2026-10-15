@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tempPath } from "./tmp";
 import * as path from "node:path";
-import { type LogMessage } from "../src/constants";
+import { CAP, messageSize, type LogMessage } from "../src/constants";
 import { dayFile, loadAll, openLog } from "../src/storage/log";
 import { loadAllNodes, saveNode } from "../src/storage/tree-store";
 
@@ -19,20 +19,71 @@ describe("durable log writer", () => {
     const writer = await openLog(base, "global");
     const messages = writer.messages;
     const date = "2026-10-06T12:00:00.000Z";
-    const added = await Promise.all([
+    const added = (await Promise.all([
       writer.append("user", "🙂é\n", date),
       writer.append("talk", "second", date),
       writer.append("tool", "third", date),
       writer.append("echo", "fourth", date),
-    ]);
+    ])).flat();
     expect(added.map((message) => message.i)).toEqual([0, 1, 2, 3]);
     expect(added[0]!.size).toBe(13);
     expect(writer.messages).toBe(messages);
     expect(messages).toEqual(added);
     expect(await loadAll(base, "global")).toEqual(added);
     const reopened = await openLog(base, "global");
-    expect((await reopened.append("note", "next", date)).i).toBe(4);
+    expect((await reopened.append("note", "next", date))[0]!.i).toBe(4);
     expect(reopened.messages).toHaveLength(5);
+  });
+
+  test("splits long non-echo text into cap-bounded messages in a row", async () => {
+    const writer = await openLog(base, "global");
+    const date = "2026-10-06T12:00:00.000Z";
+    const line = "x".repeat(99) + "\n"; // 100 chars, newline kept with its line
+    const text = line.repeat(301); // 30100 chars: just over the cap
+    const added = await writer.append("user", text, date);
+    expect(added.map((m) => m.i)).toEqual([0, 1]);
+    expect(added.map((m) => m.text)).toEqual([line.repeat(300), line]);
+    for (const part of added) {
+      expect(part.text.length).toBeLessThanOrEqual(CAP);
+      expect(part.size).toBe(messageSize("user", part.text));
+    }
+    expect(writer.nextId).toBe(2);
+    expect(writer.messages).toEqual(added);
+    expect(await loadAll(base, "global")).toEqual(added);
+    // The next append continues the row without an ID gap.
+    expect((await writer.append("talk", "after", date))[0]!.i).toBe(2);
+  });
+
+  test("a cut that would split a surrogate pair or CRLF moves before it", async () => {
+    const writer = await openLog(base, "global");
+    const date = "2026-10-06T12:00:00.000Z";
+    // The naive cut at CAP lands between the two halves of the emoji.
+    const emoji = "a".repeat(CAP - 1) + "🙂" + "b".repeat(10);
+    const splitEmoji = await writer.append("talk", emoji, date);
+    expect(splitEmoji.map((m) => m.text)).toEqual(["a".repeat(CAP - 1), "🙂" + "b".repeat(10)]);
+    expect(splitEmoji.map((m) => m.text).join("")).toBe(emoji);
+    // And between the \r and \n of a CRLF line ending.
+    const crlf = "a".repeat(CAP - 1) + "\r\n" + "b".repeat(10);
+    const splitCrlf = await writer.append("talk", crlf, date);
+    expect(splitCrlf.map((m) => m.text)).toEqual(["a".repeat(CAP - 1), "\r\n" + "b".repeat(10)]);
+    expect(splitCrlf.map((m) => m.text).join("")).toBe(crlf);
+  });
+
+  test("echo is never split; every other kind is", async () => {
+    const writer = await openLog(base, "global");
+    const date = "2026-10-06T12:00:00.000Z";
+    const text = "line\n".repeat(6501); // 32505 chars
+    const echoed = await writer.append("echo", text, date);
+    expect(echoed).toHaveLength(1);
+    expect(echoed[0]!.text).toBe(text);
+    for (const kind of ["user", "talk", "tool", "note"] as const) {
+      const added = await writer.append(kind, text, date);
+      expect(added.length).toBeGreaterThan(1);
+      expect(added.map((m) => m.text).join("")).toBe(text);
+      expect(added.every((m) => m.text.length <= CAP)).toBe(true);
+    }
+    const all = await loadAll(base, "global");
+    expect(all.map((m) => m.i)).toEqual([...all.keys()]);
   });
 
   test("reopens a torn tail without joining the next record to it", async () => {
@@ -46,8 +97,8 @@ describe("durable log writer", () => {
     try {
       const writer = await openLog(base, "global");
       expect(writer.messages).toEqual([kept]);
-      const added = await writer.append("talk", "after", date);
-      expect(added.i).toBe(1);
+      const [added] = await writer.append("talk", "after", date);
+      expect(added!.i).toBe(1);
       expect(await readFile(file, "utf8")).toBe(original + "\n" + JSON.stringify(added) + "\n");
       expect(await loadAll(base, "global")).toEqual([kept, added]);
       expect(warn).toHaveBeenCalled();
@@ -74,7 +125,7 @@ describe("durable log writer", () => {
     try {
       const writer = await openLog(base, "global");
       expect(writer.messages).toEqual([zero, three]);
-      expect((await writer.append("note", "next", date)).i).toBe(6);
+      expect((await writer.append("note", "next", date))[0]!.i).toBe(6);
       expect((await loadAll(base, "global")).map((message) => message.i)).toEqual([0, 3, 6]);
       expect((await readFile(file, "utf8")).startsWith(original)).toBe(true);
       expect(warn.mock.calls.some(([message]) => String(message).includes("gap"))).toBe(true);
@@ -99,8 +150,8 @@ describe("durable log writer", () => {
       expect(writer.nextId).toBe(2);
       const pending = writer.append("talk", "next", date);
       expect(writer.nextId).toBe(2);
-      const added = await pending;
-      expect(added.i).toBe(2);
+      const [added] = await pending;
+      expect(added!.i).toBe(2);
       expect(writer.nextId).toBe(3);
       expect(await loadAll(base, "global")).toEqual([kept, added]);
       expect((await openLog(base, "global")).nextId).toBe(3);
@@ -113,7 +164,7 @@ describe("durable log writer", () => {
     const writer = await openLog(base, "global");
     await expect(writer.append("user", "bad", "../../escape")).rejects.toThrow("date");
     expect(writer.messages).toEqual([]);
-    expect((await writer.append("user", "valid", "2026-10-06T12:00:00Z")).i).toBe(0);
+    expect((await writer.append("user", "valid", "2026-10-06T12:00:00Z"))[0]!.i).toBe(0);
   });
 
   test("preserves a complete final record that lacks its newline", async () => {
@@ -126,7 +177,7 @@ describe("durable log writer", () => {
     const writer = await openLog(base, "global");
     expect(writer.messages).toEqual([kept]);
     expect(await readFile(file, "utf8")).toBe(original + "\n");
-    expect((await writer.append("talk", "next", date)).i).toBe(1);
+    expect((await writer.append("talk", "next", date))[0]!.i).toBe(1);
     expect((await loadAll(base, "global")).map((message) => message.i)).toEqual([0, 1]);
   });
 
@@ -148,7 +199,7 @@ describe("durable log writer", () => {
     expect(await readFile(file, "utf8")).toBe(original);
     const reopened = await openLog(base, "global");
     expect(reopened.messages).toEqual([possible]);
-    expect((await reopened.append("user", "next", date)).i).toBe(1);
+    expect((await reopened.append("user", "next", date))[0]!.i).toBe(1);
   });
 
   test("refuses to overflow the largest known safe ID", async () => {

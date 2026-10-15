@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import {
+  CAP,
   messageSize,
   type Kind,
   type LogMessage,
@@ -32,7 +33,28 @@ export function dayFile(base: string, scope: string, dateISO: string): string {
 export interface LogWriter {
   readonly messages: LogMessage[];
   readonly nextId: number;
-  append(kind: Kind, text: string, dateISO?: string): Promise<LogMessage>;
+  append(kind: Kind, text: string, dateISO?: string): Promise<LogMessage[]>;
+}
+
+/** Lossless character-bounded pieces. Keep line endings with their lines. */
+export function splitLogText(text: string): string[] {
+  const pieces: string[] = [];
+  let start = 0;
+  while (text.length - start > CAP) {
+    let end = start + CAP;
+    const newline = text.lastIndexOf("\n", end - 1);
+    if (newline >= start) end = newline + 1;
+    else {
+      const high = text.charCodeAt(end - 1);
+      const low = text.charCodeAt(end);
+      if ((high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff) ||
+          (text[end - 1] === "\r" && text[end] === "\n")) end--;
+    }
+    pieces.push(text.slice(start, end));
+    start = end;
+  }
+  pieces.push(text.slice(start));
+  return pieces;
 }
 
 /** Load once; serialize durable appends and keep the public messages reference. */
@@ -54,18 +76,28 @@ export async function openLog(base: string, scope: string): Promise<LogWriter> {
         throw new Error("optchat: invalid message date");
       }
       const result = pending.then(async () => {
-        if (!Number.isSafeInteger(nextID)) throw new Error("optchat: log IDs exhausted");
-        const message: LogMessage = {
-          i: nextID,
-          kind,
-          text,
-          size,
-          date,
-        };
-        await appendRecord(dayFile(base, scope, new Date().toISOString()), message);
-        messages.push(message);
-        nextID++;
-        return message;
+        // Tool results (echo) are clipped to CAP at their source, never split.
+        // Every other long text is logged as several messages in a row.
+        const texts = kind === "echo" ? [text] : splitLogText(text);
+        // Exact comparison: adding texts.length to nextID could round at 2^53.
+        if (nextID > Number.MAX_SAFE_INTEGER - texts.length + 1) {
+          throw new Error("optchat: log IDs exhausted");
+        }
+        const added: LogMessage[] = [];
+        for (const part of texts) {
+          const message: LogMessage = {
+            i: nextID,
+            kind,
+            text: part,
+            size: messageSize(kind, part),
+            date,
+          };
+          await appendRecord(dayFile(base, scope, new Date().toISOString()), message);
+          messages.push(message);
+          nextID++;
+          added.push(message);
+        }
+        return added;
       });
       pending = result.then(() => {});
       // A failed disk write blocks later appends until the writer is reopened.
