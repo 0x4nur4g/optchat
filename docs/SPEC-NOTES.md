@@ -43,7 +43,8 @@ Older reports stored as `user` messages remain readable without migration.
 - Provider responses are buffered with `stream: false`. Entries become available
   after completed responses or tool calls; the CLI does not stream tokens.
 - `zoom(id, n)` navigates an aligned binary range. At `n = 1`, it reads the stored
-  message. `date(id)` reads that message's stored timestamp.
+  message. `date(id)` reads that message's stored timestamp. Tool-result capping
+  applies even when the source message is larger than the result limit.
 - Pagination deviation: `zoom(id, 1, page?)` uses optional 1-based pages,
   defaulting to page 1. Short results retain their exact legacy format. Long
   results use `id+0|page p/count chars start:end` followed by a newline and
@@ -54,6 +55,10 @@ Older reports stored as `user` messages remain readable without migration.
   capping is a no-op. Pages on ranges, noninteger/nonpositive pages, and pages
   beyond the message are refused. This extends the reference's two-argument
   tool rather than allowing its raw-message result to be irretrievably capped.
+- The turn prompt carries two navigation rules: the view's newest mention of a
+  thing is the one that counts, so zoom it to the whole message before any other
+  source and before acting, assuming or asking; and zoom is the only way through
+  memory, never a grep or search of the chat or tree files.
 
 ## Units and Unicode
 

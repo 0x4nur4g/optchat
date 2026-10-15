@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   COMPACT_SYSTEM,
+  MASTER_SYSTEM,
+  SHARED_SYSTEM,
   buildCompressStep,
   buildMergeStep,
   capToolResult,
@@ -8,6 +10,7 @@ import {
 import { initReady, pumpOnce } from "../src/compactor/pump";
 import { cutAtBytes, shortestUnder } from "../src/compactor/size";
 import { CAP, NODE, byteLen } from "../src/constants";
+import { TURN_SYSTEM } from "../src/turn/loop";
 
 const ID_MARK = /\d+\+\d+\|/;
 
@@ -186,5 +189,33 @@ describe("compactor Unicode and size limits", () => {
     expect(capped).toBe("漢".repeat(14984) + "\n[... 10032 characters cut ...]\n" + "漢".repeat(14984));
     expect(capped.length).toBe(30000);
     expect(byteLen(capped)).toBe(89936);
+  });
+});
+
+describe("turn prompt navigation rules (issue #12)", () => {
+  // The prompt wraps at ~70 columns, so phrases are pinned against the
+  // unwrapped text; byte-identity across calls is pinned separately below.
+  const unwrapped = MASTER_SYSTEM.replace(/\n/g, " ");
+
+  test("the view's newest mention of a thing is the truth, zoomed whole before anything else", () => {
+    for (const phrase of [
+      "The view is OptChat's memory",
+      "the newest mention of a thing in it is the one that counts",
+      "zoom it open until the whole message is in front of you",
+      "no other source comes first",
+      "never act, assume or ask on a summary alone",
+    ]) {
+      expect(unwrapped).toContain(phrase);
+    }
+  });
+
+  test("zoom is the only way through memory, never grep or a file search", () => {
+    expect(unwrapped).toContain("Zoom is the only way through that memory");
+    expect(unwrapped).toContain("never grep or search the chat or tree files");
+  });
+
+  test("both rules sit in the shared prompt's turn part, byte-identical for turns and compactions", () => {
+    expect(TURN_SYSTEM).toBe(SHARED_SYSTEM);
+    expect(SHARED_SYSTEM.startsWith(MASTER_SYSTEM + "\n\n")).toBe(true);
   });
 });
