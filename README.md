@@ -187,7 +187,6 @@ for a separate data repository. It does not publish data to a remote repository.
 - VIEW 128000 bytes budget
 - JOBS 8 parallel compactor calls
 - TRIES 5 size attempts per node
-- RETRY 10 s failed node retry delay
 - CAP 30000 characters max tool result kept (head + cut note + tail)
 - MARKS 50000 / 80000 / 100000 character offsets for stable view pieces
 

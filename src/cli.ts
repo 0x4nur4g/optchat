@@ -424,6 +424,13 @@ const model = usePlan
 // --- compactor pump: background loop; JOBS cap lives in pumpOnce ------------
 const busy = new Set<string>();
 const reported = new Set<string>();
+const failedAt = new Map<string, number>();
+// Retry generation: how far the chat has advanced. A failed node retries only
+// past it, never on a timer. Every durable append advances it, and so does
+// input that will become one: a turn settles before it can log its input, so
+// without counting the arrival a failed required node could park the chat
+// with nothing left to unlock its retry.
+let retryEpoch = 0;
 let stopPump = false;
 let idleWake: (() => void) | null = null;
 let pumpVersion = 0;
@@ -454,9 +461,11 @@ async function pumpLoop(): Promise<void> {
     compactionView.update(snapshot, messages.length, sizeOf, isBuilt);
     const started = await pumpOnce({
       ready,
+      epoch: retryEpoch,
       isBuilt,
       busy,
       reported,
+      failedAt,
       adapter: compressor,
       signal: pumpAbort.signal,
       onSettled: wakePump,
@@ -511,6 +520,7 @@ async function log(kind: Kind, text: string): Promise<void> {
     arrive(ready, message.i); // a leaf enters the ready queue on arrival
   }
   await saveView(dir, scope, view);
+  retryEpoch++;
   wakePump();
   console.log(`${kind}: ${text}`);
 }
@@ -685,6 +695,8 @@ if (printView) {
       return;
     }
     queue.push(line);
+    retryEpoch++;
+    wakePump();
     kickTurn();
   });
 

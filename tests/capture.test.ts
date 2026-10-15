@@ -38,7 +38,7 @@ describe("capture module", () => {
     await pumpOnce({
       ready: initReady([{ l: 0, i: 0, id: 0, n: 1 }], isBuilt, 1),
       isBuilt,
-      busy: new Set(), reported: new Set(),
+      busy: new Set(), reported: new Set(), failedAt: new Map(),
       message: () => messages[1]!,
       children: () => { throw new Error("unexpected merge"); },
       context: () => [],

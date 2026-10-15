@@ -3,7 +3,6 @@ export const VIEW = 128_000; // view budget bytes (~62-64k tokens)
 export const LOW = 64_000; // batch floor: a merge batch drops the view to here
 export const JOBS = 8; // parallel compactor calls
 export const TRIES = 5; // size retries per node
-export const RETRY_MS = 10_000; // failed node retry delay
 export const CAP = 30_000; // max chars of tool result kept
 export const MARKS = [50_000, 80_000, 100_000]; // cache breakpoints (chars)
 

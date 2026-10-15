@@ -25,6 +25,7 @@ function stubs(
     isBuilt,
     busy: new Set(),
     reported: new Set(),
+    failedAt: new Map(),
     adapter: {
       openCompaction(_context, step) {
         steps.push(step);
@@ -43,7 +44,6 @@ function stubs(
       savedNodes.push(nodeKey(l, i));
     },
     report: () => {},
-    sleep: async () => {},
   };
   return { opts, savedNodes, steps };
 }

@@ -80,8 +80,10 @@ address, delimiter, or wrapper in the final request; allow provider context head
   attempt loop, then retain the shortest candidate. Measure actual stored bytes.
 - A leaf builds when the built frontier reaches it. A merge starts once both
   its halves are built. Compaction context ends at the first unbuilt line, so
-  it never contains a gap or placeholder. Failed nodes
-  retry after the fixed delay; report the first failure rather than repeating it.
+  it never contains a gap or placeholder. Failed
+  nodes retry when the chat advances — an appended message, or queued input
+  that will become one — never on a timer; report the first failure rather
+  than repeating it.
 - Fold the view on load. During a run, append at the end and merge the most-due
   eligible adjacent pair. Replace children only with a built parent. Never split
   an already merged part or rebuild the live tiling on every summary completion.

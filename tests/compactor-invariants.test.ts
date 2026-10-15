@@ -57,6 +57,7 @@ describe("AGENTS.md rule 5: compactor input adds no node IDs", () => {
       isBuilt: () => false,
       busy,
       reported,
+      failedAt: new Map(),
       adapter: {
         openCompaction(context, step) {
           seen.push({ context, step });
@@ -70,7 +71,6 @@ describe("AGENTS.md rule 5: compactor input adds no node IDs", () => {
         saved.push(text);
       },
       report: () => {},
-      sleep: async () => {},
     });
     expect(seen.length).toBe(1);
     expect(seen[0]!.context.join("\n")).not.toMatch(ID_MARK);
@@ -114,6 +114,7 @@ describe("AGENTS.md rule 5: model compactor output is one line only", () => {
       isBuilt: () => false,
       busy,
       reported,
+      failedAt: new Map(),
       adapter: {
         openCompaction() {
           return { reply: async () => "first line\nsecond line\nthird line" };
@@ -126,7 +127,6 @@ describe("AGENTS.md rule 5: model compactor output is one line only", () => {
         saved.push(text);
       },
       report: () => {},
-      sleep: async () => {},
     });
     expect(saved.length).toBe(1);
     expect(saved[0]).not.toContain("\n");

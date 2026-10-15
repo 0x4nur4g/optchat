@@ -563,7 +563,7 @@ describe("offline native CLI", () => {
     expect(existsSync(path.join(dir, "lock.sock"))).toBe(false);
   });
 
-  test("cancelling settle aborts delayed compactor retries and preserves input", async () => {
+  test("cancelling settle during a failed compaction preserves input and retries on new input", async () => {
     const dir = await fixture();
     const writer = await openLog(dir, "global");
     await writer.append("note", "historical source ".repeat(50));
@@ -576,19 +576,57 @@ describe("offline native CLI", () => {
         return reply({ content: "must not answer an unbuilt view" });
       }
       compactions++;
-      child.stdin.write("  queued while settling  \n/cancel\n/exit\n");
-      child.stdin.end();
-      return new Response("offline compactor failure", { status: 500 });
+      if (compactions === 1) {
+        child.stdin.write("  queued while settling  \n/cancel\n/exit\n");
+        child.stdin.end();
+        return new Response("offline compactor failure", { status: 500 });
+      }
+      // No timer: the retry starts when the queued input arrives or is
+      // preserved as an append, and it rebuilds the node.
+      return reply({ content: "short memory" });
     });
     child = start(dir, [], env);
     child.stdin.write("first pending prompt\n");
     const output = await result(child);
     expect(output.code).toBe(0);
     expect(actorCalls).toBe(0);
-    expect(compactions).toBe(1);
+    expect(compactions).toBe(2);
     expect((await loadAll(dir, "global")).filter((message) => message.kind === "user").map((message) => message.text)).toEqual([
       "first pending prompt", "  queued while settling  ",
     ]);
+    expect(existsSync(path.join(dir, "lock.sock"))).toBe(false);
+  }, 5000);
+
+  test("input arriving during a failed settle unlocks the compactor retry", async () => {
+    const dir = await fixture();
+    const writer = await openLog(dir, "global");
+    await writer.append("note", "historical source ".repeat(50));
+    let child!: ReturnType<typeof start>;
+    let compactions = 0;
+    const env = provider((body) => {
+      if (!isCompaction(body)) return reply({ content: "answer" });
+      compactions++;
+      if (compactions === 1) {
+        // This input arrives while the turn waits on settle; the log cannot
+        // take it until the turn ends, so its arrival alone must unlock the
+        // retry — otherwise the chat deadlocks until an explicit cancel.
+        child.stdin.write("late message\n/exit\n");
+        child.stdin.end();
+        return new Response("offline compactor failure", { status: 500 });
+      }
+      return reply({ content: "short memory" });
+    });
+    child = start(dir, [], env);
+    child.stdin.write("first pending prompt\n");
+    const output = await result(child);
+    expect(output.code).toBe(0);
+    expect(compactions).toBe(2);
+    const log = await loadAll(dir, "global");
+    expect(log.filter((message) => message.kind === "user").map((message) => message.text)).toEqual([
+      "first pending prompt", "late message",
+    ]);
+    // The retry rebuilt the view, the settle ended, and the turn answered.
+    expect(log.some((message) => message.kind === "talk")).toBe(true);
     expect(existsSync(path.join(dir, "lock.sock"))).toBe(false);
   }, 5000);
 

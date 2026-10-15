@@ -2,7 +2,7 @@
 // in ready queues) plus an async runner skeleton. No I/O here except the
 // injected model adapter; storage, view and persistence stay with the caller
 // (turn/cli).
-import { JOBS, NODE, RETRY_MS, TRIES, byteLen } from "../constants";
+import { JOBS, NODE, TRIES, byteLen } from "../constants";
 import type { CompactionAdapter } from "../model/adapter";
 import { nodeKey } from "../tree/address";
 import type { IsBuilt, Part } from "../view/fold";
@@ -58,8 +58,9 @@ export function candidates(T: number, isBuilt: IsBuilt, busy: Set<string>, first
 // The spec's scheduler: keep the nodes that are ready to build in queues and
 // never scan the tree for work. A leaf enters when its message arrives and
 // the frontier already reaches it (every view line before it built); a merge
-// enters when its second child is saved; a failed node re-enters when its
-// retry delay releases the busy slot. A merge's frontier rule holds by
+// enters when its second child is saved; a failed node re-enters when the
+// chat advances past its failed attempt, never on a timer. A merge's
+// frontier rule holds by
 // construction: a built node implies every leaf before its end is built, so
 // the frontier has already passed any parent whose second half just finished.
 
@@ -154,7 +155,7 @@ export function saved(ready: ReadyQueues, isBuilt: IsBuilt, l: number, i: number
   if (isBuilt(l, i ^ 1) && !isBuilt(l + 1, parent)) push(mergeQueue(ready, l + 1), parent);
 }
 
-/** Re-enter a node whose retry delay just released its busy slot. */
+/** Re-enter a node unlocked by a chat advance after a failure. */
 export function requeue(ready: ReadyQueues, l: number, i: number): void {
   push(l === 0 ? ready.leaves : mergeQueue(ready, l), i);
 }
@@ -184,6 +185,11 @@ export interface PumpOptions {
   isBuilt: IsBuilt;
   busy: Set<string>; // keys of nodes running now; kept by the caller
   reported: Set<string>; // keys whose first failure was reported; kept by the caller
+  failedAt: Map<string, number>; // failed attempt's starting generation; kept by the caller
+  // Retry generation: how far the chat has advanced. Defaults to T, so a failed
+  // node is retried at the next appended message. A caller that settles before
+  // it can append may advance it earlier, on input that will become a message.
+  epoch?: number;
   adapter: CompactionAdapter;
   // Level 0: the message's bare kind and its whole text.
   message: (i: number) => { kind: string; text: string };
@@ -196,33 +202,27 @@ export interface PumpOptions {
   // First failure of a node; the caller logs it.
   report: (l: number, i: number, err: unknown) => void;
   signal?: AbortSignal;
-  // Wake the caller whenever a running or delayed node releases its busy slot.
+  // Wake the caller whenever a running node releases its busy slot.
   onSettled?: () => void;
-  // Test hook; defaults to a real timer.
-  sleep?: (ms: number) => Promise<void>;
-}
-
-function delay(ms: number, signal?: AbortSignal, sleep?: PumpOptions["sleep"]): Promise<void> {
-  return new Promise((resolve) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const done = () => {
-      if (timer !== undefined) clearTimeout(timer);
-      signal?.removeEventListener("abort", done);
-      resolve();
-    };
-    if (signal?.aborted) return done();
-    signal?.addEventListener("abort", done, { once: true });
-    if (sleep) void Promise.resolve().then(() => sleep(ms)).then(done, done);
-    else timer = setTimeout(done, ms);
-  });
 }
 
 // Start up to JOBS nodes from the ready queues and resolve when those runs
-// end; the caller re-invokes while it returns a positive count. A failed node
-// keeps its busy slot until RETRY_MS passes, then re-enters its queue for
-// another try; only its first failure is reported.
+// end; the caller re-invokes while it returns a positive count. Failures
+// release capacity immediately, but only a greater retry generation permits
+// another attempt: the chat advances when a message is appended, or earlier
+// on input that will become one. Record the generation at dispatch, so chat
+// advancing during the call also unlocks a retry.
 export async function pumpOnce(opts: PumpOptions): Promise<number> {
   if (opts.signal?.aborted) return 0;
+  const at = opts.epoch ?? opts.ready.T;
+  // A chat advance since a failure unlocks it: the node re-enters its queue.
+  // Each advance unlocks one more attempt; no timer ever runs.
+  for (const [key, gen] of opts.failedAt) {
+    if (gen >= at) continue;
+    opts.failedAt.delete(key);
+    const [l, i] = key.split(":").map(Number) as [number, number];
+    requeue(opts.ready, l, i);
+  }
   const free = JOBS - opts.busy.size;
   if (free <= 0) return 0;
   const picked: Candidate[] = [];
@@ -232,22 +232,16 @@ export async function pumpOnce(opts: PumpOptions): Promise<number> {
     opts.busy.add(nodeKey(c.l, c.i));
     picked.push(c);
   }
-  await Promise.allSettled(picked.map((c) => runNode(opts, c)));
+  await Promise.allSettled(picked.map((c) => runNode(opts, c, at)));
   return picked.length;
 }
 
-async function runNode(opts: PumpOptions, c: Candidate): Promise<void> {
+async function runNode(opts: PumpOptions, c: Candidate, at: number): Promise<void> {
   const key = nodeKey(c.l, c.i);
   const settled = () => {
     opts.busy.delete(key);
     opts.onSettled?.();
   };
-  const retry = () => {
-    opts.busy.delete(key);
-    requeue(opts.ready, c.l, c.i); // the node re-enters for another try
-    opts.onSettled?.();
-  };
-  let delayed = false;
   let saving = false;
   try {
     opts.signal?.throwIfAborted();
@@ -288,18 +282,16 @@ async function runNode(opts: PumpOptions, c: Candidate): Promise<void> {
     // Never race a durable save against cancellation; shutdown must await it.
     await opts.save(c.l, c.i, accepted);
     saved(opts.ready, opts.isBuilt, c.l, c.i); // frontier + parent readiness
+    opts.failedAt.delete(key);
     opts.reported.delete(key); // a later failure is reported again
   } catch (err) {
     if (opts.signal?.aborted && !saving) return;
+    opts.failedAt.set(key, at);
     if (!opts.reported.has(key)) {
       opts.reported.add(key);
       opts.report(c.l, c.i, err);
     }
-    if (!opts.signal?.aborted) {
-      delayed = true;
-      void delay(RETRY_MS, opts.signal, opts.sleep).then(retry);
-    }
   } finally {
-    if (!delayed) settled();
+    settled();
   }
 }
